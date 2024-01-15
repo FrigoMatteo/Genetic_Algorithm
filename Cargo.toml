@@ -1,0 +1,32 @@
+[package]
+name = "tRust_us_AI"
+version = "0.1.0"
+edition = "2021"
+authors = ["Frigo Matteo"]
+publish = ["kellnr"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand = "0.8.5"
+tRust_us_Path_finding = {version = "0.1.0",registry = "kellnr"}
+
+
+
+robotics_lib = {version = "0.1.21", registry = "kellnr"}
+
+oxagaudiotool = {version = "0.2.0",registry = "kellnr"}
+asfalt_inator = {version = "0.1.0",registry = "kellnr"}
+rust_eze_spotlight = {version = "1.0.1",registry = "kellnr"}
+sense_and_find_by_rustafariani = {version = "0.1.1", registry="kellnr"}
+charting_tools = {version = "1.0.4",registry = "kellnr"}
+crab_rave_explorer = {version = "0.1.2",registry = "kellnr"}
+bob_lib = {version="0.1.0",registry = "kellnr"}
+vent_tool_ascii_crab = { version = "0.1.3", registry="kellnr"}
+ghost_amazeing_island = {version = "1.0.2",registry = "kellnr"}
+
+
+image = "0.24.7"
+log = "0.4.20"
+lazy_static = "1.4.0"
+
