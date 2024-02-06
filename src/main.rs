@@ -1,7 +1,7 @@
-use std::cmp::min;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
+use std::time::Duration;
 use rand::{Rng, thread_rng};
 use robotics_lib::energy::Energy;
 use robotics_lib::event::events::Event;
@@ -26,8 +26,10 @@ use charting_tools::charted_paths::ChartedPaths;
 
 
 use image::{Rgb, RgbImage};
+//use image::codecs::png::CompressionType::Default;
 use lazy_static::lazy_static;
-use robotics_lib::utils::calculate_cost_go_with_environment;
+use robotics_lib::utils::{calculate_cost_go_with_environment, LibError};
+use robotics_lib::utils::LibError::{NotEnoughContentProvided, NotEnoughEnergy, OperationNotAllowed};
 use robotics_lib::world::environmental_conditions::EnvironmentalConditions;
 
 
@@ -38,159 +40,6 @@ static WORLD_SIZE:usize=300;
 static INPUT_DIR_SIZE:usize=12;
 static GENERATION_LIMIT:usize=100;
 static POPULATION_NUMBER:usize=8;
-/*
-struct WorldGeneratorRandom {
-    size: usize,
-}
-impl WorldGeneratorRandom {
-    fn new(size: usize) -> Self {
-        WorldGeneratorRandom { size }
-    }
-}
-impl Generator for WorldGeneratorRandom {
-    fn gen(&mut self) -> (Vec<Vec<Tile>>, (usize, usize), EnvironmentalConditions, f32, Option<HashMap<Content, f32>>) {
-        WorldGenerator::new(200,true,1,2.0);
-
-
-        let mut rng = rand::thread_rng();
-        let mut map: Vec<Vec<Tile>> = Vec::new();
-        // Initialize the map with default tiles
-        let mut row: Vec<Tile> = Vec::new();
-        for k in 0..self.size{
-            let tile_type=Grass;
-            let mut content =None;
-            if k==1{
-                content=Garbage(5);
-            }
-            if k==2{
-                content=Bin(0..10);
-            }
-            if k==3{
-                content=Crate(0..20);
-            }
-            row.push(Tile{
-                tile_type,content,elevation:0,
-            })
-        }
-        map.push(row);
-        for i in 1..self.size {
-            let mut row: Vec<Tile> = Vec::new();
-            if i == self.size - 1 {
-                for _ in 0..self.size-1 {
-                    let i_tiletype = rng.gen_range(0..=9);
-                    let i_content = rng.gen_range(0..=8);
-                    let elevation = rng.gen_range(0..=9);
-                    let tile_type = match i_tiletype {
-                        | 0 => DeepWater,
-                        | 1 => ShallowWater,
-                        | 2 => Sand,
-                        | 3 => Grass,
-                        | 4 => Street,
-                        | 5 => Hill,
-                        | 6 => Mountain,
-                        | 7 => Snow,
-                        | 8 => Lava,
-                        | _ => Grass,
-                    };
-                    let content;
-                    if tile_type != Lava && tile_type != DeepWater && tile_type.properties() != Teleport(false).properties() && tile_type!=ShallowWater && tile_type!=Snow{
-                        content = match i_content {
-                            1 => Rock(2),
-                            2 => Garbage(5),
-                            3=> Coin(5),
-                            | _ => None,
-                        };
-                    } else {
-                        content = None;
-                    }
-                    row.push(Tile {
-                        tile_type,
-                        content,
-                        elevation,
-                    });
-                }
-                let tile_type=Grass;
-                let content=None;
-                let elevation=0;
-                row.push(Tile{
-                    tile_type,
-                    content,
-                    elevation,
-                });
-                map.push(row);
-            } else {
-                for _ in 0..self.size {
-                    let i_tiletype = rng.gen_range(0..=9);
-                    let i_content = rng.gen_range(0..=8);
-                    let elevation = rng.gen_range(0..=9);
-                    let tile_type = match i_tiletype {
-                        | 0 => DeepWater,
-                        | 1 => ShallowWater,
-                        | 2 => Sand,
-                        | 3 => Grass,
-                        | 4 => Street,
-                        | 5 => Hill,
-                        | 6 => Mountain,
-                        | 7 => Snow,
-                        | 8 => Lava,
-                        | _ => Grass,
-                    };
-                    let content;
-                    if tile_type != Lava && tile_type != DeepWater && tile_type.properties() != Teleport(false).properties() && tile_type!=ShallowWater && tile_type!=Street && tile_type!=Snow{
-                        content = match i_content {
-                            1 => Rock(2),
-                            2 => Garbage(5),
-                            3=> Coin(5),
-                            | _ => None,
-                        };
-                    } else {
-                        content = None;
-                    }
-                    row.push(Tile {
-                        tile_type,
-                        content,
-                        elevation,
-                    });
-                }
-                map.push(row);
-            }
-        }
-        let environmental_conditions = EnvironmentalConditions::new(&[Sunny, Rainy], 15, 12).unwrap();
-
-        let max_score = rand::random::<f32>();
-
-
-        for i in &map {
-            for j in i {
-                set_color(&j.tile_type);
-            }
-            println!();
-        }
-        println!("\nContent:");
-        for i in &map {
-            for j in i {
-                print!(" |{}",j.content);
-                match j.content.get_value().0{
-                    Some(t)=>print!("({})| ",t),
-                    _=>print!("| "),
-                };
-            }
-            println!();
-        }
-        println!("\nElevetion:");
-        for i in &map {
-            for j in i {
-                print!(" |{}| ", j.elevation);
-            }
-            println!();
-        }
-
-        (map, (0, 0), environmental_conditions, max_score, Option::None)
-    }
-}
-*/
-
-
 
 
 fn export_to_image(map: &Vec<Vec<Option<Tile>>>, filename: &str,robot:&impl Runnable) {
@@ -262,30 +111,78 @@ lazy_static! {
 
     static ref POSITIONS_TO_GO:Mutex<Vec<PositionToGo>>=Mutex::new(PositionToGo::new());
 
+    static ref FOLLOW_DIRECTIONS:Mutex<MovesToFollow>=Mutex::new(MovesToFollow::new());
+
+    static ref WAIT_FOR_ENERGY:Mutex<bool>=Mutex::new(false);
+
 }
 
-static FOLLOW_DIRECTIONS:Mutex<Vec<InputDir>>=Mutex::new(Vec::new());
 
 struct MyRobot{
-    Robot:Robot,
+    robot:Robot,
     interest_points:HashMap<(usize,usize),Content>,
 }
 
 
 impl Runnable for MyRobot {
     fn process_tick(&mut self, world: &mut World) {
+
+
+        //Immediately return. We are running the threads
         if *RECHARGE.lock().unwrap(){
             return;
         }
 
-        //I move myself
 
+
+        let mut follow_dir=FOLLOW_DIRECTIONS.lock().unwrap();
+
+        if self.enough_energy_to_operate(&(*follow_dir),world){
+            *WAIT_FOR_ENERGY.lock().unwrap()=false;
+        }else{
+            *WAIT_FOR_ENERGY.lock().unwrap()=true;
+        }
+
+
+        //check if we need more energy
+        if *WAIT_FOR_ENERGY.lock().unwrap(){
+            return;
+        }
+
+
+        //We follow the path created by the threads (we basically move)
+        if !follow_dir.path_to_follow.is_empty(){
+            println!("Energy before walking:{:?}",self.get_energy());
+            //Actuator
+            self.move_based_on_threads(world,&follow_dir.path_to_follow);
+            follow_dir.path_to_follow.clear();
+
+        }
+
+        // I update my position
         let d=self.get_coordinate();
 
         POSITION.lock().unwrap().0=d.get_row();
         POSITION.lock().unwrap().1=d.get_col();
 
 
+
+        //I visualize the new area I have just moved
+        println!("After walking Energy:{:?}",self.get_energy());
+        let res_visualize=self.visualize_around(world);
+        match res_visualize{
+            Ok(_)=>{},
+            Err(e)=>{if e==NotEnoughEnergy{*WAIT_FOR_ENERGY.lock().unwrap()=true; return;}
+                // TODO do something for the operation not allowed and content not provided
+                if e==OperationNotAllowed{return;}
+                if e==NotEnoughContentProvided{return;}
+            },
+        }
+        println!("After walking and visualizing Energy:{:?}",self.get_energy());
+
+
+
+        //I use the debug function to show the global map only. I never use it for calculation purpose
         let v=debug(self,world).0;
         let mut new:Vec<Vec<Option<Tile>>>=Vec::new();
         for i in v{
@@ -296,22 +193,18 @@ impl Runnable for MyRobot {
             new.push(vet);
         }
 
+        //I create the graphical image of the map (total view)
         export_to_image(&new,"mappa.jpg",self);
 
-        //visualize(self,world);
-        //Visualize the world based on what I have already seen.
-        println!("Cost energy for looking around:");
-        println!("Energy:{:?}",self.get_energy());
-        self.visualize_around(world);
-        println!("Energy:{:?}",self.get_energy());
 
-
+        //I upload the new image of what I have seen
         let v=robot_map(world).unwrap();
         export_to_image(&v,"visualize.jpg",self);
 
         print!("\n\n");
 
 
+        //I upload the new static data, which they will be used by the threads.
         self.update_static_data(world);
         self.save_contents(world);
 
@@ -327,8 +220,6 @@ impl Runnable for MyRobot {
         println!("wh:{:?}",wh);
         */
 
-        //Visualizzazione mappa su command line
-        //visualize(self,world);
     }
 
     fn handle_event(&mut self, event: Event) {
@@ -336,31 +227,42 @@ impl Runnable for MyRobot {
     }
 
     fn get_energy(&self) -> &Energy {
-        &self.Robot.energy
+        &self.robot.energy
     }
 
     fn get_energy_mut(&mut self) -> &mut Energy {
-        &mut self.Robot.energy
+        &mut self.robot.energy
     }
 
     fn get_coordinate(&self) -> &Coordinate {
-        &self.Robot.coordinate
+        &self.robot.coordinate
     }
 
     fn get_coordinate_mut(&mut self) -> &mut Coordinate {
-        &mut self.Robot.coordinate
+        &mut self.robot.coordinate
     }
 
     fn get_backpack(&self) -> &BackPack {
-        &self.Robot.backpack
+        &self.robot.backpack
     }
 
     fn get_backpack_mut(&mut self) -> &mut BackPack {
-        &mut self.Robot.backpack
+        &mut self.robot.backpack
     }
 }
 
 impl MyRobot{
+
+    fn move_based_on_threads(&mut self,world:&mut World,path:&Vec<InputDir>){
+
+        for i in path{
+            if *i==InputDir::None{continue}
+
+            let _=go(self,world,i.property());
+        }
+
+
+    }
 
     fn get_from_to(&self,distance:usize,len:i32)->Vec<(i32,i32)>{
 
@@ -398,9 +300,11 @@ impl MyRobot{
             }
         }
 
+        /*
         for i in &self.interest_points{
             println!("At this coordinate:({},{}) there is {:?}",i.0.0,i.0.1,i.1);
         }
+         */
 
     }
 
@@ -411,51 +315,32 @@ impl MyRobot{
         //I clear my old view
         ROBOT_MAP.lock().unwrap().clear();
         let map=robot_map(world);
+
         if map.is_none(){return;}
+
         let mut m=map.unwrap();
+
         //I copy the new view into my ROBOT_MAP, used for explore threads.
         ROBOT_MAP.lock().unwrap().append(&mut m);
 
-        /*
-
-        EXPLORE_DIR.lock().unwrap().clear();
-
-        let ar1=[ONE_DIRECTION_DISTANCE as i32,-(ONE_DIRECTION_DISTANCE as i32)];
-        let ar2=[DISTANCE as i32,-(DISTANCE as i32)];
-
-        for i in ar1{
-            if (x+i).is_positive() && (x+i)<WORLD_SIZE as i32 {
-                EXPLORE_DIR.lock().unwrap().insert(((x+i) as usize,y as usize),true);
-            }
-            if (y+i).is_positive() && (y+i)<WORLD_SIZE as i32{
-                EXPLORE_DIR.lock().unwrap().insert((x as usize,(y+i) as usize),true);
-            }
-        }
-
-        for i in ar2{
-            for j in ar2{
-                if (x+i).is_positive() && (y+i).is_positive() && (x+i)<WORLD_SIZE as i32 && (y+i)<WORLD_SIZE as i32{
-                    EXPLORE_DIR.lock().unwrap().insert(((x+i) as usize,(y+j) as usize),true);
-                }
-            }
-        }
-
-         */
-
     }
 
-    fn visualize_around(&mut self,world:&mut World){
+    fn visualize_around(&mut self,world:&mut World)->Result<(),LibError>{
         POSITIONS_TO_GO.lock().unwrap().clear();
 
-        if robot_map(world).is_none(){return;}
+        if robot_map(world).is_none(){return Err(OperationNotAllowed);}
 
         let rob_map=robot_map(world).unwrap();
 
+        let d=self.get_coordinate();
+        let x=d.get_row();
+        let y=d.get_col();
 
         //I initialize the vector also used by the threads, which they will find the best path to it
-        let res_vet=PositionToGo::new_with_world(rob_map);
+        let res_vet=PositionToGo::new_with_world(rob_map,x,y);
 
         *POSITIONS_TO_GO.lock().unwrap()=res_vet.clone();
+
 
         let _=Spotlight::illuminate(&Default::default(), self, world, DISTANCE);
 
@@ -469,6 +354,82 @@ impl MyRobot{
             };
         }
 
+        return Ok(());
+    }
+
+    fn enough_energy_to_operate(&mut self, moves:&MovesToFollow,world:&World)->bool{
+
+        let mut cost=moves.cost;
+
+        let d=self.get_coordinate();
+        let mut x=d.get_row();
+        let mut y=d.get_col();
+
+        for i in &moves.path_to_follow{
+            if *i==InputDir::None{continue}
+
+            let d=direction_value(&i);
+
+            x=(x as i32+d.0) as usize;
+            y=(y as i32+d.1) as usize;
+
+        }
+
+        //Energy cost used for visualize the unknown world:
+
+        if robot_map(world).is_none(){return false;}//return Err(OperationNotAllowed);}
+
+        let rob_map=robot_map(world).unwrap();
+
+        //I initialize the vector also used by the threads, which they will find the best path to it
+        let res_vet=PositionToGo::new_with_world(rob_map,x,y);
+
+        //Check energy costs:
+        let mut cost_energy =0;
+        let mut flag=false;
+
+        for i in &res_vet{
+
+            cost_energy+=match i{
+                PositionToGo::Down => ONE_DIRECTION_DISTANCE*3,
+                PositionToGo::Right => ONE_DIRECTION_DISTANCE*3,
+                PositionToGo::Top => ONE_DIRECTION_DISTANCE*3,
+                PositionToGo::Left => ONE_DIRECTION_DISTANCE*3,
+                _=>{flag=true; 0},
+            };
+        }
+
+        if flag{
+            //Only problem with the calculation of the total cost:
+            let mut sp=Spotlight::calculate_illuminate_cost(&Default::default(),self,world,DISTANCE).unwrap();
+            //The spotlight cost isn't correct. idk why
+
+            //For manage the spotlight cost error I put a bigger limit to it
+            if sp<200{
+                sp=200;
+            }
+
+            cost_energy+=sp;
+        }
+
+        cost+=cost_energy;
+
+        self.get_energy().has_enough_energy(cost)
+    }
+
+}
+
+struct MovesToFollow{
+    path_to_follow:Vec<InputDir>,
+    cost:usize,
+}
+
+impl MovesToFollow{
+    fn new()->Self{
+        MovesToFollow{
+            path_to_follow:Vec::new(),
+            cost:0,
+        }
     }
 
 }
@@ -501,16 +462,14 @@ impl PositionToGo{
         v
     }
 
-    fn new_with_world(rob_map:Vec<Vec<Option<Tile>>>)->Vec<PositionToGo>{
+    fn new_with_world(rob_map:Vec<Vec<Option<Tile>>>,x:usize,y:usize)->Vec<PositionToGo>{
+
+
         let iter_me=[PositionToGo::Down, PositionToGo::DownRight,
             PositionToGo::Right, PositionToGo::TopRight, PositionToGo::Top,
             PositionToGo::TopLeft, PositionToGo::Left, PositionToGo::DownLeft];
 
         let mut v=Vec::new();
-
-        let pos=POSITION.lock().unwrap().clone();
-        let x=pos.0;
-        let y=pos.1;
 
 
         for i in iter_me{
@@ -518,10 +477,13 @@ impl PositionToGo{
 
             let (ds_x,ds_y)=get_next_position(i);
 
-            let destination_x=((x as i32)+ds_x)as usize;
-            let destination_y=((y as i32)+ds_y)as usize;
+            let destination_x=(x as i32)+ds_x;
+            let destination_y=(y as i32)+ds_y;
 
-            if rob_map[destination_x][destination_y].is_none(){
+
+            if destination_x>=WORLD_SIZE as i32 || destination_y>=WORLD_SIZE as i32 || destination_x<0 || destination_y<0{ println!("here here");continue }
+
+            if rob_map[destination_x as usize][destination_y as usize].is_none(){
                 v.push(position);
             }
         }
@@ -530,6 +492,7 @@ impl PositionToGo{
         v
 
     }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -554,9 +517,21 @@ impl InputDir{
         }
 
     }
+
+    fn property(&self)->Direction{
+
+        match self{
+            InputDir::Right => Direction::Right,
+            InputDir::Left => Direction::Left,
+            InputDir::Top => Direction::Up,
+            InputDir::Bottom => Direction::Down,
+            _=>{Direction::Down}
+        }
+
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone,PartialEq)]
 struct GeneticSearch{
     vector:Vec<InputDir>,
     cost:usize,
@@ -644,7 +619,8 @@ impl GeneticSearch{
             next_x=x+i;
             next_y=y+j;
 
-            if inside_thread_map[next_x as usize][next_y as usize].is_none(){
+
+            if next_y>=WORLD_SIZE as i32|| next_x>=WORLD_SIZE as i32 || next_x<0 || next_y<0 || inside_thread_map[next_x as usize][next_y as usize].is_none(){
                 null_block+=1;
                 //Potrebbe creare problemi se esce dalla mappa ancora prima di arrivare alla destinazione.
                 //Quindi non va a coprire il prossimo if.
@@ -655,10 +631,12 @@ impl GeneticSearch{
             }
 
 
-            self.cost=self.cost+genetic_cost(
-                (x as usize,y as usize),
-                (next_x as usize,next_y as usize),
-                inside_thread_map);
+            if *ele!=InputDir::None{
+                self.cost=self.cost+genetic_cost(
+                    (x as usize,y as usize),
+                    (next_x as usize,next_y as usize),
+                    inside_thread_map);
+            }
 
             x=next_x;
             y=next_y;
@@ -702,7 +680,7 @@ impl GeneticSearch{
 fn main() {
 
     let r = MyRobot {
-        Robot:Robot::new(),
+        robot:Robot::new(),
         interest_points:HashMap::new(),
     };
 
@@ -712,164 +690,175 @@ fn main() {
 
     let mut run = Runner::new(Box::new(r), &mut g).unwrap();
 
-    let _=run.game_tick();
-
-    *RECHARGE.lock().unwrap()=true;
-
-    for _ in 0..2{
-
-    }
-    let time=spawn(||{
-
-        //First thread, which will launch the other threads.
-        let mut handlers=vec![];
-
-
-        let data=ROBOT_MAP.lock().unwrap();
-        let map=Arc::new(data.clone());
-        let positions=POSITIONS_TO_GO.lock().unwrap().clone();
-
-
-        let x=POSITION.lock().unwrap().0.clone();
-        let y=POSITION.lock().unwrap().1.clone();
-
-
-        println!("\n");
-        for i in positions{
-            //Follows the other threads for specific direction
-
-            println!("Positions to go:{:?}",i);
-
-            //I lauch a thread for every specific direction which we may follow
-            let thread_map=Arc::clone(&map);
-
-            //move converts any variables captured by reference or mutable reference to variables captured by value
-            let handle=spawn( move ||{
-                //Robot map for the threads.
-                let inside_thread_map=Arc::clone(&thread_map);
-
-                //Get position of where our thread's destination is.
-                let (destination_x,destination_y)=get_next_position(i);
-
-                let mut genetic_set=Vec::new();
-
-                //Initial population
-                for _ in 0..8{
-                    let n=GeneticSearch::new(INPUT_DIR_SIZE,x as i32,y as i32);
-                    genetic_set.push(n);
-                }
-
-
-                let mut f=true;
-                let mut counter=0;
-                let mut index_save=0;
-                let mut new_index=0;
-
-                let dest_x=(x as i32+destination_x) as usize;
-                let dest_y=(y as i32+destination_y) as usize;
-
-                //We repeat the Selection, Crossover and mutation:
-                for _ in 0..GENERATION_LIMIT{
-                    //I fixed the generation limit to 100, which is optimal, since also the children learn from the parents.
-
-
-                    counter+=1;
-                    //Genetic Fitness, we calculate the weight of the random generated directions
-                    for i in genetic_set.iter_mut(){
-                        i.genetic_cost(&inside_thread_map,(dest_x,dest_y));
-                        if f && i.distanze_from_dest==0{
-                            index_save=counter;
-                            new_index=index_save+30;
-                            f=false;
-                        }
-                    }
-
-
-                    //Genetic Selection: we take an elite set and one based on probability.
-                    //This way, also the children can learn.
-                    //let (first,second)=genetic_selection(&mut genetic_set);
-                    let (first,second)=genetic_selection(&mut genetic_set);
-
-                    //Genetic crossover. Here we generete new sons from first and second
-                    genetic_crossover(&mut genetic_set, &first, &second, &x, &y);
-
-                    //Genetic mutation. Where are going to change a some value for escaping the local min problem.
-                    genetic_mutation(&mut genetic_set);
-
-                    //We also push the two winning parents with their children
-                    genetic_set.push(first);
-                    genetic_set.push(second);
-                }
-
-                //We generate the last generation:
-                for i in genetic_set.iter_mut(){
-                    i.genetic_cost(&inside_thread_map,(dest_x,dest_y));
-                }
-                /*
-                println!("\n\nAfter 100 generations:");
-
-                for i in genetic_set.iter(){
-                    println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}",i.weight,i.distanze_from_dest,i.cost,i.vector);
-                }
-
-                println!("I get 0 at n:{}",index_save);
-
-                 */
-
-
-                //we take the fastest sample:
-                let mut index_res=INFINITE;
-                for i in genetic_set.iter().enumerate(){
-                    if i.1.distanze_from_dest==0{
-                        if index_res==INFINITE{
-                            index_res=i.0;
-                        }else if i.1.weight<genetic_set[index_res].weight{
-                            index_res=i.0;
-                        }
-                    }
-                }
-
-                genetic_set[index_res].clone()
-
-            });
-            handlers.push(handle);
-        }
-        //Example of return value from thead
-        let mut min_so_far=GeneticSearch::default();
-        println!("\n\nAt the calculation I got:");
-        for i in handlers{
-            let value=i.join().unwrap();
-            println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}",value.weight,value.distanze_from_dest,value.cost,value.vector);
-
-            if value.distanze_from_dest==0 && value.weight<min_so_far.weight{
-                if value.weight==min_so_far.weight{
-                    if value.cost<min_so_far.cost{
-                        min_so_far=value;
-                    }
-                }else{
-                    min_so_far=value;
-                }
-            }
-        }
-        println!("\n\nPath to follow:");
-        println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost,min_so_far.vector);
-
-        min_so_far
-
-    });
 
     for _ in 0..100{
-        //Runna il game tick
+        loop {
+            let _ = run.game_tick();
+            if !*WAIT_FOR_ENERGY.lock().unwrap(){
+                break;
+            }
+        }
+
+        *RECHARGE.lock().unwrap()=true;
+
+        let time=spawn(||{
+
+            //First thread, which will launch the other threads.
+            let mut handlers=vec![];
+
+
+            let data=ROBOT_MAP.lock().unwrap();
+            let map=Arc::new(data.clone());
+            let positions=POSITIONS_TO_GO.lock().unwrap().clone();
+
+
+            let x=POSITION.lock().unwrap().0.clone();
+            let y=POSITION.lock().unwrap().1.clone();
+
+
+            for i in positions{
+                //Follows the other threads for specific direction
+
+                //I lauch a thread for every specific direction which we may follow
+                let thread_map=Arc::clone(&map);
+
+                //move converts any variables captured by reference or mutable reference to variables captured by value
+                let handle=spawn( move ||{
+                    //Robot map for the threads.
+                    let inside_thread_map=Arc::clone(&thread_map);
+
+                    //Get position of where our thread's destination is.
+                    let (destination_x,destination_y)=get_next_position(i);
+
+                    let mut genetic_set=Vec::new();
+
+                    //Initial population
+                    for _ in 0..8{
+                        let n=GeneticSearch::new(INPUT_DIR_SIZE,x as i32,y as i32);
+                        genetic_set.push(n);
+                    }
+
+
+                    let mut f=true;
+                    let mut counter=0;
+                    let mut index_save=0;
+                    let mut new_index=0;
+
+                    let dest_x=(x as i32+destination_x) as usize;
+                    let dest_y=(y as i32+destination_y) as usize;
+
+                    //We repeat the Selection, Crossover and mutation:
+                    for _ in 0..GENERATION_LIMIT{
+                        //I fixed the generation limit to 100, which is optimal, since also the children learn from the parents.
+
+
+                        counter+=1;
+                        //Genetic Fitness, we calculate the weight of the random generated directions
+                        for i in genetic_set.iter_mut(){
+                            i.genetic_cost(&inside_thread_map,(dest_x,dest_y));
+                            if f && i.distanze_from_dest==0{
+                                index_save=counter;
+                                new_index=index_save+30;
+                                f=false;
+                            }
+                        }
+
+
+                        //Genetic Selection: we take an elite set and one based on probability.
+                        //This way, also the children can learn.
+                        //let (first,second)=genetic_selection(&mut genetic_set);
+                        let (first,second)=genetic_selection(&mut genetic_set);
+
+                        //Genetic crossover. Here we generete new sons from first and second
+                        genetic_crossover(&mut genetic_set, &first, &second, &x, &y);
+
+                        //Genetic mutation. Where are going to change a some value for escaping the local min problem.
+                        genetic_mutation(&mut genetic_set);
+
+                        //We also push the two winning parents with their children
+                        genetic_set.push(first);
+                        genetic_set.push(second);
+                    }
+
+                    //We generate the last generation:
+                    for i in genetic_set.iter_mut(){
+                        i.genetic_cost(&inside_thread_map,(dest_x,dest_y));
+                    }
+                    /*
+                    println!("\n\nAfter 100 generations:");
+
+                    for i in genetic_set.iter(){
+                        println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}",i.weight,i.distanze_from_dest,i.cost,i.vector);
+                    }
+
+                    println!("I get 0 at n:{}",index_save);
+
+                     */
+
+
+                    //we take the fastest sample:
+                    let mut index_res=INFINITE;
+                    for i in genetic_set.iter().enumerate(){
+                        if i.1.distanze_from_dest==0{
+                            if index_res==INFINITE{
+                                index_res=i.0;
+                            }else if i.1.weight<genetic_set[index_res].weight{
+                                index_res=i.0;
+                            }
+                        }
+                    }
+
+
+                    if index_res!=INFINITE{
+                        Some(genetic_set[index_res].clone())
+                    }else{
+                        Option::None
+                    }
+
+                });
+                handlers.push(handle);
+            }
+            //Example of return value from thead
+            let mut min_so_far=GeneticSearch::default();
+            //println!("\n\nAt the calculation I got:");
+            for i in handlers{
+                let value=i.join().unwrap();
+                //println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}",value.weight,value.distanze_from_dest,value.cost,value.vector);
+
+                if value==Option::None{continue}
+
+                let value=value.unwrap();
+
+                if value.distanze_from_dest==0 && value.weight<min_so_far.weight{
+                    if value.weight==min_so_far.weight{
+                        if value.cost<min_so_far.cost{
+                            min_so_far=value;
+                        }
+                    }else{
+                        min_so_far=value;
+                    }
+                }
+            }
+            println!("\n\nPath to follow:");
+            println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost,min_so_far.vector);
+
+            min_so_far
+
+        });
+
+        for _ in 0..30{
+            let _=run.game_tick();
+            sleep(Duration::from_millis(10));
+        }
+
+        //Wait
+        let t=time.join().unwrap();
+
+        *RECHARGE.lock().unwrap()=false;
+        FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=t.vector;
+        FOLLOW_DIRECTIONS.lock().unwrap().cost=t.cost;
     }
 
-    //Wait
-    let t=time.join().unwrap();
-    *RECHARGE.lock().unwrap()=false;
-    *FOLLOW_DIRECTIONS.lock().unwrap()=t.vector;
-
-    for i in FOLLOW_DIRECTIONS.lock().unwrap().iter(){
-        println!("Direction:{:?}",i);
-    }
 }
 
 
@@ -1002,37 +991,4 @@ fn get_next_position(pos:PositionToGo)->(i32,i32){
         PositionToGo::Left => (0,-(ONE_DIRECTION_DISTANCE as i32)),
         PositionToGo::DownLeft => (DISTANCE as i32,-(DISTANCE as i32))
     }
-}
-
-fn set_color(tile:&TileType){
-    match tile{
-        DeepWater => {print!(" 🌊 ")}
-        ShallowWater => {print!(" 🟦 ")}
-        Sand => {print!(" 🟨 ")}
-        Grass => {print!(" 🟩 ")}
-        Street => {print!(" 🟪 ")}
-        Hill => {print!(" 🟫 ")}
-        Mountain => {print!(" 🟤 ")}
-        Snow => {print!(" ◻️ ")}
-        Lava => {print!(" 🟥 ")}
-        Teleport(_) => {print!(" ⏹️ ")}
-        _=>{print!(" ❔ ")}
-    }
-}
-
-fn visualize(robot:&impl Runnable,world:&World){
-    let map=robot_map(world).unwrap();
-    let position=robot.get_coordinate();
-
-    println!("\nWhat i discovered:");
-
-    for i in map.iter().enumerate(){
-        for j in i.1.iter().enumerate(){
-            if i.0==position.get_row() && j.0==position.get_col(){print!(" 🤖 ")}
-            else if j.1.is_none(){print!(" ◼️ ")}
-            else{set_color(&j.1.as_ref().unwrap().tile_type)}
-        }
-        println!();
-    }
-    println!("I have this amount of energy:{:?}",robot.get_energy());
 }
