@@ -1,7 +1,7 @@
 mod export_of_image;
 mod genetic_algorithm;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
@@ -27,6 +27,7 @@ use lazy_static::lazy_static;
 use robotics_lib::utils::{calculate_cost_go_with_environment, LibError};
 use robotics_lib::utils::LibError::{NotEnoughContentProvided, NotEnoughEnergy, OperationNotAllowed};
 use robotics_lib::world::environmental_conditions::EnvironmentalConditions;
+use tRust_us_Path_finding::tools::gps::Command::Control;
 
 
 static DISTANCE:usize=4;
@@ -152,7 +153,13 @@ impl Runnable for MyRobot {
         self.update_static_data(world);
         self.save_contents(world);
 
-
+        println!("\nMy coordinates:{:?}",self.get_coordinate());
+        println!("Size backpack:{}",self.get_backpack().get_size());
+        for i in self.get_backpack().get_contents().iter(){
+            if i.0.to_default()==Content::Rock(0).to_default(){
+                println!("Size of rock:{}",i.1);
+            }
+        }
 
 
         //let mut charted_path = ChartingTools::tool::<ChartedPaths>().unwrap();
@@ -218,7 +225,16 @@ impl MyRobot{
         for i in path{
             if *i==InputDir::None{continue}
 
+            match *i{
+                InputDir::Right(a) => {self.destroy_if_true(world,a,i)},
+                InputDir::Left(a) => {self.destroy_if_true(world,a,i);}
+                InputDir::Top(a) => {self.destroy_if_true(world,a,i);}
+                InputDir::Bottom(a) => {self.destroy_if_true(world,a,i);}
+                InputDir::None => {}
+            }
+
             let d=go(self,world,i.property());
+
             match d{
                 Ok(_) => {}
                 Err(e) => {println!("Error:{:?}",e)}
@@ -230,6 +246,12 @@ impl MyRobot{
         let y=self.get_coordinate().get_col();
         self.visited[x][y]=true;
 
+    }
+
+    fn destroy_if_true(&mut self,world:&mut World, t:bool,data:&InputDir){
+        if t{
+            let _=destroy(self,world,data.property());
+        }
     }
 
     fn get_from_to(&self,distance:usize,len:i32)->Vec<(i32,i32)>{
@@ -262,17 +284,17 @@ impl MyRobot{
 
                 let content=&map[i as usize][j as usize].as_ref().unwrap().content;
 
-                if content.to_default()==None || content.to_default()==Fire || content.to_default()==Tree(0) || content.to_default()==Bush(0) || content.to_default()==Fish(0){continue}
+                if content.to_default()==None || content.to_default()==Fire || content.to_default()==Tree(0) || content.to_default()==Bush(0) || content.to_default()==Fish(0) || content.to_default()==Rock(0) || content.to_default()==Coin(0){continue}
 
                 self.interest_points.insert((i as usize,j as usize), content.clone());
             }
         }
 
-
+        /*
         for i in &self.interest_points{
             println!("At this coordinate:({},{}) there is {:?}",i.0.0,i.0.1,i.1);
         }
-
+         */
 
     }
 
@@ -375,6 +397,13 @@ impl MyRobot{
         let mut x=d.get_row();
         let mut y=d.get_col();
 
+        if robot_map(world).is_none(){return false;}//return Err(OperationNotAllowed);}
+
+        let rob_map=robot_map(world).unwrap();
+
+        //I initialize the vector also used by the threads, which they will find the best path to it
+        let res_vet=PositionToGo::new_with_world(rob_map,x,y);
+
         for i in &moves.path_to_follow{
             if *i==InputDir::None{continue}
 
@@ -383,16 +412,9 @@ impl MyRobot{
             x=(x as i32+d.0) as usize;
             y=(y as i32+d.1) as usize;
 
+
         }
 
-        //Energy cost used for visualize the unknown world:
-
-        if robot_map(world).is_none(){return false;}//return Err(OperationNotAllowed);}
-
-        let rob_map=robot_map(world).unwrap();
-
-        //I initialize the vector also used by the threads, which they will find the best path to it
-        let res_vet=PositionToGo::new_with_world(rob_map,x,y);
 
         //Check energy costs:
         let mut cost_energy =0;
@@ -652,6 +674,10 @@ impl GeneticSearch{
 
         let mut null_block=0;
 
+        let mut object_destroy=0;
+
+        let mut set:HashSet<(i32,i32)>=HashSet::new();
+
         self.cost=0;
 
         for ele in self.vector.iter_mut(){
@@ -683,12 +709,46 @@ impl GeneticSearch{
                     inside_thread_map);
             }
 
+            if inside_thread_map[next_x as usize][next_y as usize].is_some(){
+                let tile=inside_thread_map[next_x as usize][next_y as usize].as_ref().unwrap();
+
+                if !set.contains(&(next_x, next_y)) && (tile.content.to_default()==Rock(0)){
+
+                    object_destroy+=1;
+
+                    //We don't want backtracking to the same block.
+                    //This way he can't exploit the fact to constantly go in the same block to lower his weight.
+                    set.insert((next_x,next_y));
+
+                    self.cost+=tile.content.properties().cost();
+
+                    //We can consider to grab the object since we walk past it.
+                    let element=ele.clone();
+
+                    *ele=match element{
+                        InputDir::Right(_) => InputDir::Right(true),
+                        InputDir::Left(_) => InputDir::Left(true),
+                        InputDir::Top(_) => InputDir::Top(true),
+                        InputDir::Bottom(_) => InputDir::Top(true),
+                        InputDir::None => InputDir::None,
+                    }
+                }else{
+                    let element=ele.clone();
+                    *ele=match element{
+                        InputDir::Right(_) => InputDir::Right(false),
+                        InputDir::Left(_) => InputDir::Left(false),
+                        InputDir::Top(_) => InputDir::Top(false),
+                        InputDir::Bottom(_) => InputDir::Top(false),
+                        InputDir::None => InputDir::None,
+                    }
+                }
+            }
+
             x=next_x;
             y=next_y;
+
         }
         self.distanze_from_dest=(x-destination.0 as i32).abs()+(y-destination.1 as i32).abs();
-
-        //println!("Costs:{} and distance from destination:{}",self.cost,self.distanze_from_dest);
 
 
         //Checking backtracking:
@@ -715,7 +775,7 @@ impl GeneticSearch{
         }
 
         //Possiamo definire il peso rispetto a: Backtracking, Costo e Movimento non possibile(va verso un blocco Null)
-        self.weight=((self.cost as f32*0.1)+((backtracking*10)as f32*0.45)+((null_block*10)as f32*0.45)) as i32;
+        self.weight=((self.cost as f32*0.1)+((backtracking*10)as f32*0.3)+((null_block*10)as f32*0.3)-((object_destroy*10)as f32*0.3)) as i32;
         //println!("Specific weight:{}",self.weight);
     }
 
@@ -732,7 +792,7 @@ fn main() {
     let mut run = Runner::new(Box::new(r), &mut g).unwrap();
 
 
-    for _ in 0..1{
+    for _ in 0..2{
         loop {
             let _ = run.game_tick();
             if !*WAIT_FOR_ENERGY.lock().unwrap(){
