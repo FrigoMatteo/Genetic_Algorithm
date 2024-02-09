@@ -1,38 +1,40 @@
 mod export_of_image;
 mod genetic_algorithm;
+mod helpers_functions;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
-use rand::{Rng, thread_rng};
+use rand::Rng;
 use robotics_lib::energy::Energy;
 use robotics_lib::event::events::Event;
 use robotics_lib::interface::{debug, destroy, Direction, go, look_at_sky, one_direction_view, robot_map};
 use robotics_lib::runner::{Robot, Runnable, Runner};
 use robotics_lib::runner::backpack::BackPack;
 use robotics_lib::world::coordinates::Coordinate;
-use robotics_lib::world::tile::{Content, Tile, TileType};
+use robotics_lib::world::tile::{Content, Tile};
 use robotics_lib::world::tile::Content::*;
-use robotics_lib::world::tile::TileType::{DeepWater, Lava};
 use robotics_lib::world::World;
+use robotics_lib::utils::LibError;
+use robotics_lib::utils::LibError::{NotEnoughContentProvided, NotEnoughEnergy, OperationNotAllowed};
+use robotics_lib::world::environmental_conditions::EnvironmentalConditions;
+
 use sense_and_find_by_rustafariani;
 use rust_eze_spotlight::Spotlight;
-
-
 use ghost_amazeing_island::world_generator::*;
+
+use genetic_algorithm::{InputDir,GeneticSearch,genetic_selection,genetic_mutation,genetic_crossover};
+use helpers_functions::{get_next_position,is_not_visualize,is_good_tile,direction_value};
+
 
 
 use lazy_static::lazy_static;
-use robotics_lib::utils::{calculate_cost_go_with_environment, LibError};
-use robotics_lib::utils::LibError::{NotEnoughContentProvided, NotEnoughEnergy, OperationNotAllowed};
-use robotics_lib::world::environmental_conditions::EnvironmentalConditions;
-use tRust_us_Path_finding::tools::gps::Command::Control;
 
 
-static DISTANCE:usize=4;
-static ONE_DIRECTION_DISTANCE:usize=8;
-static INFINITE:usize=10000;
+pub static DISTANCE:usize=4;
+pub static ONE_DIRECTION_DISTANCE:usize=8;
+pub static INFINITE:usize=10000;
 static WORLD_SIZE:usize=300;
 static INPUT_DIR_SIZE:usize=18;
 static GENERATION_LIMIT:usize=120;
@@ -41,7 +43,7 @@ static POPULATION_NUMBER:usize=8;
 
 
 //Static means it has 'static lifetime.
-//ref, we allow myltiple parts of our code to access the same piece of data without copying it
+//ref, we allow multiple parts of our code to access the same piece of data without copying it
 lazy_static! {
     //This mutex will block threads waiting for the lock to become available
     static ref RECHARGE:Mutex<bool>=Mutex::new(false);
@@ -54,7 +56,7 @@ lazy_static! {
 
     static ref ROBOT_MAP:Arc<Mutex<Vec<Vec<Option<Tile>>>>>=Arc::new(Mutex::new(Vec::new()));
 
-    static ref ENVIRONMENT:Mutex<Option<EnvironmentalConditions>>=Mutex::new(Option::None);
+    pub(crate) static ref ENVIRONMENT:Mutex<Option<EnvironmentalConditions>>=Mutex::new(Option::None);
 
     static ref POSITIONS_TO_GO:Mutex<Vec<PositionToGo>>=Mutex::new(PositionToGo::new());
 
@@ -156,7 +158,7 @@ impl Runnable for MyRobot {
         println!("\nMy coordinates:{:?}",self.get_coordinate());
         println!("Size backpack:{}",self.get_backpack().get_size());
         for i in self.get_backpack().get_contents().iter(){
-            if i.0.to_default()==Content::Rock(0).to_default(){
+            if i.0.to_default()==Rock(0).to_default(){
                 println!("Size of rock:{}",i.1);
             }
         }
@@ -555,232 +557,6 @@ impl PositionToGo{
 
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum InputDir{
-    Right(bool),
-    Left(bool),
-    Top(bool),
-    Bottom(bool),
-    None
-}
-
-
-impl InputDir{
-    fn is_reverse(&self, other:&InputDir)->bool{
-
-        match self{
-            InputDir::Top(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Bottom(false) ){true} else {false}},
-            InputDir::Left(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Right(false)) {true} else {false}},
-            InputDir::Bottom(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Top(false)) {true} else {false}},
-            InputDir::Right(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Left(false)) {true} else {false}}
-            _ => {false}
-        }
-
-    }
-
-    fn property(&self)->Direction{
-        match self{
-            InputDir::Right(_) => Direction::Right,
-            InputDir::Left(_) => Direction::Left,
-            InputDir::Top(_) => Direction::Up,
-            InputDir::Bottom(_)=> Direction::Down,
-            _=>{Direction::Down}
-        }
-    }
-
-    fn random_input_dir()->InputDir{
-        let mut rng =thread_rng();
-        let t: i32 =rng.gen_range(0..5);
-
-        match t{
-            0=>InputDir::Bottom(false),
-            1=>InputDir::Left(false),
-            2=>InputDir::None,
-            3=>InputDir::Right(false),
-            _=>InputDir::Top(false),
-        }
-    }
-}
-
-#[derive(Clone,PartialEq)]
-struct GeneticSearch{
-    vector:Vec<InputDir>,
-    cost:usize,
-    distanze_from_dest:i32,
-    start_x:i32,
-    start_y:i32,
-    weight:i32
-}
-
-impl Default for GeneticSearch{
-    fn default() -> Self {
-
-        GeneticSearch{
-            vector:Vec::new(),
-            cost:INFINITE,
-            distanze_from_dest:INFINITE as i32,
-            start_y:0,
-            start_x:0,
-            weight:INFINITE as i32,
-        }
-    }
-}
-
-impl GeneticSearch{
-
-    fn new(n:usize, x:i32, y:i32)->Self{
-        let mut g=GeneticSearch{
-            vector:Vec::new(),
-            cost:INFINITE,
-            distanze_from_dest:100,
-            start_x:x,
-            start_y:y,
-            weight:1000,
-        };
-
-        g.generate_random_sequence(n);
-        g
-    }
-
-    fn new_with_vector(x:i32,y:i32,vector:Vec<InputDir>)->Self{
-        GeneticSearch{
-            vector,
-            cost:INFINITE,
-            distanze_from_dest:100,
-            start_y:y,
-            start_x:x,
-            weight:1000,
-        }
-    }
-
-    fn generate_random_sequence(&mut self,n:usize){
-        for _ in 0..n{
-
-            //The rng is used because it is faster to catch the genereted value if we have to lauch it a lot of times.
-            self.vector.push(InputDir::random_input_dir());
-
-        }
-
-    }
-
-    fn genetic_cost(&mut self,inside_thread_map:&Arc<Vec<Vec<Option<Tile>>>>,destination:(usize,usize)){
-        let mut x=self.start_x;
-        let mut y=self.start_y;
-
-        let mut next_x=0;
-        let mut next_y=0;
-
-        let mut backtracking=0;
-
-        let mut null_block=0;
-
-        let mut object_destroy=0;
-
-        let mut set:HashSet<(i32,i32)>=HashSet::new();
-
-        self.cost=0;
-
-        for ele in self.vector.iter_mut(){
-            let (i,j)=direction_value(ele);
-
-            next_x=x+i;
-            next_y=y+j;
-
-
-            if is_not_visualize(next_x, next_y){
-                null_block+=1;
-                *ele=InputDir::None;
-                //Potrebbe creare problemi se esce dalla mappa ancora prima di arrivare alla destinazione.
-                //Quindi non va a coprire il prossimo if.
-                continue;
-            }
-
-            if !is_good_tile(&inside_thread_map[next_x as usize][next_y as usize]){
-                null_block+=1;
-                *ele=InputDir::random_input_dir();
-                continue;
-            }
-
-
-            if *ele!=InputDir::None{
-                self.cost=self.cost+genetic_cost(
-                    (x as usize,y as usize),
-                    (next_x as usize,next_y as usize),
-                    inside_thread_map);
-            }
-
-            if inside_thread_map[next_x as usize][next_y as usize].is_some(){
-                let tile=inside_thread_map[next_x as usize][next_y as usize].as_ref().unwrap();
-
-                if !set.contains(&(next_x, next_y)) && (tile.content.to_default()==Rock(0)){
-
-                    object_destroy+=1;
-
-                    //We don't want backtracking to the same block.
-                    //This way he can't exploit the fact to constantly go in the same block to lower his weight.
-                    set.insert((next_x,next_y));
-
-                    self.cost+=tile.content.properties().cost();
-
-                    //We can consider to grab the object since we walk past it.
-                    let element=ele.clone();
-
-                    *ele=match element{
-                        InputDir::Right(_) => InputDir::Right(true),
-                        InputDir::Left(_) => InputDir::Left(true),
-                        InputDir::Top(_) => InputDir::Top(true),
-                        InputDir::Bottom(_) => InputDir::Top(true),
-                        InputDir::None => InputDir::None,
-                    }
-                }else{
-                    let element=ele.clone();
-                    *ele=match element{
-                        InputDir::Right(_) => InputDir::Right(false),
-                        InputDir::Left(_) => InputDir::Left(false),
-                        InputDir::Top(_) => InputDir::Top(false),
-                        InputDir::Bottom(_) => InputDir::Top(false),
-                        InputDir::None => InputDir::None,
-                    }
-                }
-            }
-
-            x=next_x;
-            y=next_y;
-
-        }
-        self.distanze_from_dest=(x-destination.0 as i32).abs()+(y-destination.1 as i32).abs();
-
-
-        //Checking backtracking:
-        ///
-        /// self.vector=[Right, Right, Left, Left]
-        ///
-        /// BackTracking=2
-        //I want to penalize the fact that he waste those 4 actions
-
-        let mut vet=Vec::new();
-        for i in self.vector.iter(){
-            if *i==InputDir::None{continue;}
-            if vet.is_empty(){
-                vet.push(i);
-            }
-            else{
-                if i.is_reverse(vet.last().unwrap()){
-                    backtracking+=1;
-                    vet.pop();
-                }else{
-                    vet.push(i);
-                }
-            }
-        }
-
-        //Possiamo definire il peso rispetto a: Backtracking, Costo e Movimento non possibile(va verso un blocco Null)
-        self.weight=((self.cost as f32*0.1)+((backtracking*10)as f32*0.3)+((null_block*10)as f32*0.3)-((object_destroy*10)as f32*0.3)) as i32;
-        //println!("Specific weight:{}",self.weight);
-    }
-
-}
-
 
 fn main() {
 
@@ -792,7 +568,7 @@ fn main() {
     let mut run = Runner::new(Box::new(r), &mut g).unwrap();
 
 
-    for _ in 0..2{
+    for _ in 0..30{
         loop {
             let _ = run.game_tick();
             if !*WAIT_FOR_ENERGY.lock().unwrap(){
@@ -825,7 +601,7 @@ fn main() {
                 for i in positions{
                     //Follows the other threads for specific direction
 
-                    //I lauch a thread for every specific direction which we may follow
+                    //I launch a thread for every specific direction which we may follow
                     let thread_map=Arc::clone(&map);
 
                     //move converts any variables captured by reference or mutable reference to variables captured by value
@@ -875,7 +651,7 @@ fn main() {
                             //let (first,second)=genetic_selection(&mut genetic_set);
                             let (first,second)=genetic_selection(&mut genetic_set);
 
-                            //Genetic crossover. Here we generete new sons from first and second
+                            //Genetic crossover. Here we generate new sons from first and second
                             genetic_crossover(&mut genetic_set, &first, &second, &x, &y);
 
                             //Genetic mutation. Where are going to change a some value for escaping the local min problem.
@@ -902,7 +678,7 @@ fn main() {
                         }
                         /*
                         println!("\nI am going to pass:");
-                        println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}",genetic_set[index_res].weight,genetic_set[index_res].distanze_from_dest,genetic_set[index_res].cost,genetic_set[index_res].vector);
+                        println!("I got weight:{},distance:{}, cost:{} and this series:{:?}",genetic_set[index_res].weight,genetic_set[index_res].distanze_from_dest,genetic_set[index_res].cost,genetic_set[index_res].vector);
                          */
 
                         if index_res!=INFINITE{
@@ -918,7 +694,7 @@ fn main() {
                 //println!("\n\nAt the calculation I got:");
                 for i in handlers{
                     let value=i.join().unwrap();
-                    //println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}",value.weight,value.distanze_from_dest,value.cost,value.vector);
+                    //println!("I got weight:{},distance:{}, cost:{} and this series:{:?}",value.weight,value.distanze_from_dest,value.cost,value.vector);
 
                     if value==Option::None{continue}
 
@@ -942,7 +718,7 @@ fn main() {
             }
 
             println!("\n\nPath to follow:");
-            println!("I got weight:{},distance:{}, cost:{} and this serie:{:?}\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost,min_so_far.vector);
+            println!("I got weight:{},distance:{}, cost:{} and this series:{:?}\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost,min_so_far.vector);
 
             min_so_far
 
@@ -962,146 +738,4 @@ fn main() {
         FOLLOW_DIRECTIONS.lock().unwrap().cost=t.cost;
     }
 
-}
-
-
-fn genetic_selection(population:&mut Vec<GeneticSearch>)->(GeneticSearch,GeneticSearch){
-    population.sort_by(|a,b| {
-        let d=a.distanze_from_dest.cmp(&b.distanze_from_dest);
-        if d.is_eq(){
-            a.weight.cmp(&b.weight)
-        }else{
-            d
-        }
-    });
-
-    let probability_choice=||->usize{
-        let t=thread_rng().gen_range(0..28);
-        match t{
-            0..=6=>1,
-            7..=12=>2,
-            13..=17=>3,
-            19..=22=>4,
-            23..=25=>5,
-            26..=27=>6,
-            _=>7,
-        }
-    };
-
-
-    let first=population[0].clone();
-    let value=probability_choice();
-    let second=population[value].clone();
-
-    population.remove(value);
-    population.remove(0);
-
-    (first,second)
-}
-
-fn genetic_mutation(population:&mut Vec<GeneticSearch>){
-    let mut rng =thread_rng();
-    for element in population.iter_mut(){
-        for i in element.vector.iter_mut(){
-            let probability=rng.gen_range(0..10);
-            //That's equivalent to 10% of probability
-            if probability<=0{
-                let mut g=i.clone();
-                while *i==g{ g=InputDir::random_input_dir(); }
-
-                *i=g;
-
-            }
-
-        }
-    }
-}
-
-fn genetic_crossover(population:&mut Vec<GeneticSearch>,first:&GeneticSearch,second:&GeneticSearch,x:&usize,y:&usize){
-    population.clear();
-
-    let piece=INPUT_DIR_SIZE/3;
-
-    let first_part=[&first.vector[..piece],&second.vector[..piece]];
-    let second_part=[&first.vector[piece..2*piece],&second.vector[piece..2*piece]];
-    let third_part=[&first.vector[2*piece..],&second.vector[2*piece..]];
-
-    population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[0],second_part[1],third_part[0]].concat()));
-    population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[0],second_part[1],third_part[1]].concat()));
-    population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[1],second_part[0],third_part[0]].concat()));
-    population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[1],second_part[0],third_part[1]].concat()));
-    population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[0],second_part[0],third_part[1]].concat()));
-    population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[1],second_part[1],third_part[0]].concat()));
-}
-
-fn genetic_cost(current_coord: (usize, usize), target_coord: (usize, usize), map:&Arc<Vec<Vec<Option<Tile>>>>) -> usize {
-    // Get tiles
-    let target_tile = map[target_coord.0][target_coord.1].clone().unwrap();
-    let current_tile = map[current_coord.0][current_coord.1].clone().unwrap();
-
-    // Init costs
-    let mut base_cost = target_tile.tile_type.properties().cost();
-    let mut elevation_cost = 0;
-
-
-    // Get informations that influence the cost
-    let environmental_conditions = ENVIRONMENT.lock().unwrap().to_owned().unwrap();
-
-
-    let new_elevation = target_tile.elevation;
-    let current_elevation = current_tile.elevation;
-
-    // Calculate cost
-    base_cost = calculate_cost_go_with_environment(base_cost, environmental_conditions, target_tile.tile_type);
-
-    // Consider elevation cost only if we are going from a lower tile to a higher tile
-    if new_elevation > current_elevation {
-        elevation_cost = (new_elevation - current_elevation).pow(2);
-    }
-
-    base_cost + elevation_cost
-}
-
-fn direction_value(value:&InputDir)->(i32,i32){
-    match value{
-        InputDir::None=>(0,0),
-        InputDir::Top(_)=>(-1,0),
-        InputDir::Right(_)=>(0,1),
-        InputDir::Left(_)=>(0,-1),
-        InputDir::Bottom(_)=>(1,0),
-    }
-}
-
-fn get_next_position(pos:PositionToGo)->(i32,i32){
-    match pos{
-        PositionToGo::Down => (ONE_DIRECTION_DISTANCE as i32,0),
-        PositionToGo::DownRight => (DISTANCE as i32,DISTANCE as i32),
-        PositionToGo::Right => (0,ONE_DIRECTION_DISTANCE as i32),
-        PositionToGo::TopRight => (-(DISTANCE as i32),DISTANCE as i32),
-        PositionToGo::Top => (-(ONE_DIRECTION_DISTANCE as i32),0),
-        PositionToGo::TopLeft => (-(DISTANCE as i32),-(DISTANCE as i32)),
-        PositionToGo::Left => (0,-(ONE_DIRECTION_DISTANCE as i32)),
-        PositionToGo::DownLeft => (DISTANCE as i32,-(DISTANCE as i32))
-    }
-}
-
-fn is_good_tile(data:&Option<Tile>) ->bool{
-    if data.is_none(){
-        false
-    }else{
-        match data.as_ref().unwrap().tile_type{
-            DeepWater => false,
-            Lava => false,
-            TileType::Wall => false,
-            _=>true
-        }
-    }
-}
-
-fn is_not_visualize(next_x:i32, next_y:i32) ->bool{
-    if next_y>=WORLD_SIZE as i32|| next_x>=WORLD_SIZE as i32 || next_x<0 || next_y<0 {
-        true
-    }else{
-        false
-    }
 }
