@@ -27,8 +27,6 @@ use ghost_amazeing_island::world_generator::*;
 use genetic_algorithm::{InputDir,GeneticSearch,genetic_selection,genetic_mutation,genetic_crossover};
 use helpers_functions::{get_next_position,is_not_visualize,is_good_tile,direction_value};
 
-
-
 use lazy_static::lazy_static;
 
 
@@ -45,7 +43,8 @@ static POPULATION_NUMBER:usize=8;
 //Static means it has 'static lifetime.
 //ref, we allow multiple parts of our code to access the same piece of data without copying it
 lazy_static! {
-    //This mutex will block threads waiting for the lock to become available
+    //This mutex will block threads waiting for the lock to become available.
+    // Used when the threads are processing and we want the main thread to run some random game tick
     static ref RECHARGE:Mutex<bool>=Mutex::new(false);
 
     //We created a Arc, because we need to use it inside threads without data racing.
@@ -62,6 +61,7 @@ lazy_static! {
 
     static ref FOLLOW_DIRECTIONS:Mutex<MovesToFollow>=Mutex::new(MovesToFollow::new());
 
+    // If we need to charge our robot because we don't have enough energy to do our stuff.
     static ref WAIT_FOR_ENERGY:Mutex<bool>=Mutex::new(false);
 
 }
@@ -77,34 +77,18 @@ struct MyRobot{
 impl Runnable for MyRobot {
     fn process_tick(&mut self, world: &mut World) {
 
-        //Immediately return. We are running the threads
-        if *RECHARGE.lock().unwrap(){
+        //Check if we have some issue with the energy, such as thread running or need energy to operate.
+        if !self.is_energy_right(world){
             return;
         }
 
 
         let mut follow_dir=FOLLOW_DIRECTIONS.lock().unwrap();
-
-        if self.enough_energy_to_operate(&(*follow_dir),world){
-            *WAIT_FOR_ENERGY.lock().unwrap()=false;
-        }else{
-            *WAIT_FOR_ENERGY.lock().unwrap()=true;
-        }
-
-
-        //check if we need more energy
-        if *WAIT_FOR_ENERGY.lock().unwrap(){
-            return;
-        }
-
-
         //We follow the path created by the threads (we basically move)
         if !follow_dir.path_to_follow.is_empty(){
-            //println!("Energy before walking:{:?}",self.get_energy());
             //Actuator
             self.move_based_on_threads(world,&follow_dir.path_to_follow);
             follow_dir.path_to_follow.clear();
-
         }
 
         // I update my position
@@ -114,8 +98,7 @@ impl Runnable for MyRobot {
         POSITION.lock().unwrap().1=d.get_col();
 
 
-
-        //I visualize the new area I have just moved
+        //I visualize the new area I have just moved in
         //println!("After walking Energy:{:?}",self.get_energy());
         let res_visualize=self.visualize_around(world);
         match res_visualize{
@@ -129,56 +112,32 @@ impl Runnable for MyRobot {
         //println!("After walking and visualizing Energy:{:?}",self.get_energy());
 
 
-        //I use the debug function to show the global map only. I never use it for calculation purpose
-        let v=debug(self,world).0;
-        let mut new:Vec<Vec<Option<Tile>>>=Vec::new();
-        for i in v{
-            let mut vet:Vec<Option<Tile>>=Vec::new();
-            for j in i{
-                vet.push(Some(j));
-            }
-            new.push(vet);
-        }
-
-        //I create the graphical image of the map (total view)
-        export_of_image::export_to_image(&new,"mappa.jpg",self);
-
-
-        //I upload the new image of what I have seen
-        let v=robot_map(world).unwrap();
-        export_of_image::export_to_image(&v,"visualize.jpg",self);
-
+        //Function for the map image:
+        self.visualize_robot_map(world);
         print!("\n\n\n");
-
 
         //I upload the new static data, which they will be used by the threads.
         self.update_static_data(world);
         self.save_contents(world);
 
-        println!("\nMy coordinates:{:?}",self.get_coordinate());
+        //println!("\nMy coordinates:{:?}",self.get_coordinate());
         println!("Size backpack:{}",self.get_backpack().get_size());
         for i in self.get_backpack().get_contents().iter(){
-            if i.0.to_default()==Rock(0).to_default(){
+            if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0){
                 println!("Size of rock:{}",i.1);
             }
         }
 
-
         //let mut charted_path = ChartingTools::tool::<ChartedPaths>().unwrap();
         //charted_path.init(&robot_map(world).unwrap(), world);
         /*
-        let de=destroy(self,world,Direction::Right);
-        println!("{:?}",de);
-        let _=go(self,world,Direction::Right);
         let wh=put(self,world,Garbage(0),5,Direction::Right);
         println!("wh:{:?}",wh);
         */
 
     }
 
-    fn handle_event(&mut self, event: Event) {
-        //println!("{:?}", event);
-    }
+    fn handle_event(&mut self, event: Event) { /*println!("{:?}", event); */}
 
     fn get_energy(&self) -> &Energy {
         &self.robot.energy
@@ -239,7 +198,7 @@ impl MyRobot{
 
             match d{
                 Ok(_) => {}
-                Err(e) => {println!("Error:{:?}",e)}
+                Err(e) => {println!("Error move:{:?}",e)}
             }
         }
 
@@ -286,17 +245,16 @@ impl MyRobot{
 
                 let content=&map[i as usize][j as usize].as_ref().unwrap().content;
 
-                if content.to_default()==None || content.to_default()==Fire || content.to_default()==Tree(0) || content.to_default()==Bush(0) || content.to_default()==Fish(0) || content.to_default()==Rock(0) || content.to_default()==Coin(0){continue}
+                if content.to_default()==None || content.to_default()==Fire || content.to_default()==Tree(0) || content.to_default()==Bush(0) || content.to_default()==Fish(0) || content.to_default()==Rock(0) || content.to_default()==Coin(0) || content.to_default()==Garbage(0){continue}
 
                 self.interest_points.insert((i as usize,j as usize), content.clone());
             }
         }
 
-        /*
+
         for i in &self.interest_points{
             println!("At this coordinate:({},{}) there is {:?}",i.0.0,i.0.1,i.1);
         }
-         */
 
     }
 
@@ -374,7 +332,9 @@ impl MyRobot{
         }
          */
 
-        if result.is_empty(){
+        // We prevent some possible problem. Since, it might get stuck in the threads to search for
+        // the best path.
+        if result.len()<=2{
             result=PositionToGo::new_already_seen(self,&rob_map,x,y);
         }
 
@@ -449,6 +409,48 @@ impl MyRobot{
         cost+=cost_energy;
 
         self.get_energy().has_enough_energy(cost)
+    }
+
+    fn visualize_robot_map(&mut self,world:&mut World){
+        //I use the debug function to show the global map only. I never use it for calculation purpose
+        let v=debug(self,world).0;
+        let mut new:Vec<Vec<Option<Tile>>>=Vec::new();
+        for i in v{
+            let mut vet:Vec<Option<Tile>>=Vec::new();
+            for j in i{
+                vet.push(Some(j));
+            }
+            new.push(vet);
+        }
+
+        //I create the graphical image of the map (total view)
+        export_of_image::export_to_image(&new,"mappa.jpg",self);
+
+
+        //I upload the new image of what I have seen
+        let v=robot_map(world).unwrap();
+        export_of_image::export_to_image(&v,"visualize.jpg",self);
+    }
+
+    fn is_energy_right(&mut self, world:&mut World) ->bool{
+        //Immediately return. We are running the threads
+        if *RECHARGE.lock().unwrap(){
+            return false;
+        }
+        let mut follow_dir=FOLLOW_DIRECTIONS.lock().unwrap();
+
+
+        // Do we need to do some free cycles because we don't have enough energy?
+        if self.enough_energy_to_operate(&(*follow_dir),world){
+            *WAIT_FOR_ENERGY.lock().unwrap()=false;
+        }else{
+            *WAIT_FOR_ENERGY.lock().unwrap()=true;
+        }
+        //check if we need more energy
+        if *WAIT_FOR_ENERGY.lock().unwrap(){
+            return false;
+        }
+        true
     }
 
 }
@@ -578,13 +580,20 @@ fn main() {
 
         *RECHARGE.lock().unwrap()=true;
 
-        //println!("New call for threads");
+
         let time=spawn(||{
             let mut thread_flag=true;
+
             //Return values from the threads:
             let mut min_so_far=GeneticSearch::default();
+
+            //We control how many interations we do to search for the best path.
+            let mut counter_try=0;
+
             while thread_flag{
+                counter_try+=1;
                 min_so_far=GeneticSearch::default();
+
                 //First thread, which will launch the other threads.
                 let mut handlers=vec![];
 
@@ -599,12 +608,11 @@ fn main() {
 
 
                 for i in positions{
-                    //Follows the other threads for specific direction
 
                     //I launch a thread for every specific direction which we may follow
                     let thread_map=Arc::clone(&map);
 
-                    //move converts any variables captured by reference or mutable reference to variables captured by value
+                    //Move converts any variables captured by reference or mutable reference to variables captured by value
                     let handle=spawn( move ||{
                         //Robot map for the threads.
                         let inside_thread_map=Arc::clone(&thread_map);
@@ -694,13 +702,15 @@ fn main() {
                 //println!("\n\nAt the calculation I got:");
                 for i in handlers{
                     let value=i.join().unwrap();
-                    //println!("I got weight:{},distance:{}, cost:{} and this series:{:?}",value.weight,value.distanze_from_dest,value.cost,value.vector);
 
                     if value==Option::None{continue}
 
                     let value=value.unwrap();
 
-                    if value.distanze_from_dest<=min_so_far.distanze_from_dest && value.weight<min_so_far.weight{
+                    //println!("I got weight:{},distance:{}, cost:{}",value.weight,value.distanze_from_dest,value.cost);
+
+
+                    if value.distanze_from_dest<=min_so_far.distanze_from_dest{
                         if value.weight==min_so_far.weight{
                             if value.cost<min_so_far.cost{
                                 min_so_far=value;
@@ -712,8 +722,17 @@ fn main() {
                 }
                 //We are going to leave the loop only if the result distance is at least lower than 1.
                 //If it doesn't work we will try again.
+                //We need to add some conditions, because it might get stucked if we are close to the deep water
+                //println!("Counter:{}",counter_try);
                 if min_so_far.distanze_from_dest<=1{
                     thread_flag=false;
+                }else if counter_try>=3 && counter_try<=10{
+                    if min_so_far.distanze_from_dest<=2{
+                        thread_flag=false;
+                    }
+                }else if counter_try>10{
+                    println!("Error in the calculation of the path");
+                    return GeneticSearch::default();
                 }
             }
 
@@ -732,6 +751,10 @@ fn main() {
 
         //We wait for the thread, which contains all the other threads, to finish
         let t=time.join().unwrap();
+        //Check if we got an error in the calculation
+        if t.weight>=1000{
+            return;
+        }
 
         *RECHARGE.lock().unwrap()=false;
         FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=t.vector;

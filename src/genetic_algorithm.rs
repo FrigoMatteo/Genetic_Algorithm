@@ -141,7 +141,7 @@ impl GeneticSearch{
             next_y=y+j;
 
 
-            if is_not_visualize(next_x, next_y){
+            if is_not_visualize(next_x, next_y) || inside_thread_map[next_x as usize][next_y as usize].is_none(){
                 null_block+=1;
                 *ele=InputDir::None;
                 continue;
@@ -149,7 +149,11 @@ impl GeneticSearch{
 
             if !is_good_tile(&inside_thread_map[next_x as usize][next_y as usize]){
                 null_block+=1;
-                *ele=InputDir::random_input_dir();
+                let mut e =ele.clone();
+                while *ele!=e{
+                    e=InputDir::random_input_dir();
+                }
+                *ele=e;
                 continue;
             }
 
