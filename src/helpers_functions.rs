@@ -11,10 +11,10 @@ use robotics_lib::world::tile::TileType::{DeepWater, Lava};
 pub(crate) fn direction_value(value:&InputDir)->(i32,i32){
     match value{
         InputDir::None=>(0,0),
-        InputDir::Top(_)=>(-1,0),
-        InputDir::Right(_)=>(0,1),
-        InputDir::Left(_)=>(0,-1),
-        InputDir::Bottom(_)=>(1,0),
+        InputDir::Top(_,_)=>(-1,0),
+        InputDir::Right(_,_)=>(0,1),
+        InputDir::Left(_,_)=>(0,-1),
+        InputDir::Bottom(_,_)=>(1,0),
     }
 }
 

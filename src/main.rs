@@ -9,7 +9,7 @@ use std::time::Duration;
 use rand::Rng;
 use robotics_lib::energy::Energy;
 use robotics_lib::event::events::Event;
-use robotics_lib::interface::{debug, destroy, Direction, go, look_at_sky, one_direction_view, robot_map};
+use robotics_lib::interface::{debug, destroy, Direction, go, look_at_sky, one_direction_view, put, robot_map};
 use robotics_lib::runner::{Robot, Runnable, Runner};
 use robotics_lib::runner::backpack::BackPack;
 use robotics_lib::world::coordinates::Coordinate;
@@ -17,12 +17,15 @@ use robotics_lib::world::tile::{Content, Tile};
 use robotics_lib::world::tile::Content::*;
 use robotics_lib::world::World;
 use robotics_lib::utils::LibError;
-use robotics_lib::utils::LibError::{NotEnoughContentProvided, NotEnoughEnergy, OperationNotAllowed};
+use robotics_lib::utils::LibError::{NotEnoughEnergy, OperationNotAllowed};
 use robotics_lib::world::environmental_conditions::EnvironmentalConditions;
 
 use sense_and_find_by_rustafariani;
 use rust_eze_spotlight::Spotlight;
 use ghost_amazeing_island::world_generator::*;
+use charting_tools::ChartingTools;
+use charting_tools::charted_coordinate::ChartedCoordinate;
+use charting_tools::charted_paths::ChartedPaths;
 
 use genetic_algorithm::{InputDir,GeneticSearch,genetic_selection,genetic_mutation,genetic_crossover};
 use helpers_functions::{get_next_position,is_not_visualize,is_good_tile,direction_value};
@@ -64,8 +67,24 @@ lazy_static! {
     // If we need to charge our robot because we don't have enough energy to do our stuff.
     static ref WAIT_FOR_ENERGY:Mutex<bool>=Mutex::new(false);
 
+    //Content we need to put in the crate/bin/bank
+    static ref CONTENT:Mutex<PutContent>=Mutex::new(PutContent::default());
+
 }
 
+
+struct PutContent{
+    content:Content,
+    quantity:usize,
+}
+impl Default for PutContent{
+    fn default() -> Self {
+        Self{
+            content:None,
+            quantity:0
+        }
+    }
+}
 
 struct MyRobot{
     robot:Robot,
@@ -87,9 +106,17 @@ impl Runnable for MyRobot {
         //We follow the path created by the threads (we basically move)
         if !follow_dir.path_to_follow.is_empty(){
             //Actuator
-            self.move_based_on_threads(world,&follow_dir.path_to_follow);
-            follow_dir.path_to_follow.clear();
+            self.move_based_on_threads(world,&mut follow_dir.path_to_follow);
+
+            if follow_dir.is_done(){
+                follow_dir.path_to_follow.clear();
+            }else{
+                println!("We left because is not done yet");
+                return;
+            }
         }
+
+        drop(follow_dir);
 
         // I update my position
         let d=self.get_coordinate();
@@ -98,15 +125,83 @@ impl Runnable for MyRobot {
         POSITION.lock().unwrap().1=d.get_col();
 
 
+        //Implement functions for go in the bank/crate/bin:
+        //check backpack:
+        if self.backpack_contains_something(){
+            let (content,size)=self.get_content_backpack();
+            println!("Content to search:{:?}",content);
+
+            let mut search=match content {
+                Garbage(_) => {Bin(0..0)}
+                Coin(_) => {Bank(0..0)}
+                _=>{None}
+            };
+
+
+            /* Doesn't work since the crate accepts only wood
+            //If we don't find the specified container, we can insert the values inside the crate.
+            if !self.container_exists(&search) && self.get_backpack().get_contents()[&content]>=10{
+                search=Crate(0..0);
+            }
+             */
+
+            if search!=None && self.container_exists(&search){
+                let (dest_x,dest_y)=self.search_content(search,d.get_row(),d.get_col());
+
+                let mut charted_path = ChartingTools::tool::<ChartedPaths>().unwrap();
+                charted_path.init(&robot_map(world).unwrap(), world);
+
+                let ch1=ChartedCoordinate::from((d.get_row(),d.get_col()));
+                let ch2=ChartedCoordinate::from((dest_x,dest_y));
+
+                let path=charted_path.shortest_path(ch1,ch2);
+
+                *CONTENT.lock().unwrap()=PutContent{
+                    content,quantity:size,
+                };
+
+                if path.is_some(){
+
+                    let path=path.unwrap();
+
+                    FOLLOW_DIRECTIONS.lock().unwrap().cost=path.0;
+
+                    let mut result_path=InputDir::convert_to_input_dir(d.get_row() as i32,d.get_col() as i32,path.1);
+
+                    let dir=result_path.pop().unwrap();
+                    let dir=match dir{
+                        InputDir::Right(_, _) => {InputDir::Right(false,true)}
+                        InputDir::Left(_, _) => {InputDir::Left(false,true)}
+                        InputDir::Top(_, _) => {InputDir::Top(false,true)}
+                        InputDir::Bottom(_, _) => {InputDir::Bottom(false,true)}
+                        InputDir::None => {InputDir::None}
+                    };
+                    result_path.push(dir);
+
+                    println!("\nPath with chartedPath:");
+                    for i in &result_path{
+                        println!("{:?}",i);
+                    }
+                    FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=result_path;
+                    *WAIT_FOR_ENERGY.lock().unwrap()=true;
+                    return;
+                }
+                else{
+                    println!("Error with the creation of path with charted path");
+                    return;
+                }
+            }
+        }
+
+
         //I visualize the new area I have just moved in
         //println!("After walking Energy:{:?}",self.get_energy());
         let res_visualize=self.visualize_around(world);
         match res_visualize{
             Ok(_)=>{},
-            Err(e)=>{if e==NotEnoughEnergy{*WAIT_FOR_ENERGY.lock().unwrap()=true; return;}
+            Err(e)=>{if e==NotEnoughEnergy{*WAIT_FOR_ENERGY.lock().unwrap()=true;}
                 // TODO do something for the operation not allowed and content not provided
-                if e==OperationNotAllowed{return;}
-                if e==NotEnoughContentProvided{return;}
+                println!("Operation not allowed:{:?}",e);return;
             },
         }
         //println!("After walking and visualizing Energy:{:?}",self.get_energy());
@@ -114,7 +209,6 @@ impl Runnable for MyRobot {
 
         //Function for the map image:
         self.visualize_robot_map(world);
-        print!("\n\n\n");
 
         //I upload the new static data, which they will be used by the threads.
         self.update_static_data(world);
@@ -123,13 +217,11 @@ impl Runnable for MyRobot {
         //println!("\nMy coordinates:{:?}",self.get_coordinate());
         println!("Size backpack:{}",self.get_backpack().get_size());
         for i in self.get_backpack().get_contents().iter(){
-            if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0){
-                println!("Size of rock:{}",i.1);
+            if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0) || i.0.to_default()==Garbage(0) || i.0.to_default()==Tree(0){
+                println!("Size of {}:{}",i.0.to_default(),i.1);
             }
         }
 
-        //let mut charted_path = ChartingTools::tool::<ChartedPaths>().unwrap();
-        //charted_path.init(&robot_map(world).unwrap(), world);
         /*
         let wh=put(self,world,Garbage(0),5,Direction::Right);
         println!("wh:{:?}",wh);
@@ -181,25 +273,39 @@ impl MyRobot{
         }
     }
 
-    fn move_based_on_threads(&mut self,world:&mut World,path:&Vec<InputDir>){
+    fn move_based_on_threads(&mut self,world:&mut World,path:&mut Vec<InputDir>){
 
-        for i in path{
+        for i in path.iter_mut(){
             if *i==InputDir::None{continue}
 
             match *i{
-                InputDir::Right(a) => {self.destroy_if_true(world,a,i)},
-                InputDir::Left(a) => {self.destroy_if_true(world,a,i);}
-                InputDir::Top(a) => {self.destroy_if_true(world,a,i);}
-                InputDir::Bottom(a) => {self.destroy_if_true(world,a,i);}
+                InputDir::Right(a,_) => {self.destroy_if_true(world,a,i)},
+                InputDir::Left(a,_) => {self.destroy_if_true(world,a,i);}
+                InputDir::Top(a,_) => {self.destroy_if_true(world,a,i);}
+                InputDir::Bottom(a,_) => {self.destroy_if_true(world,a,i);}
                 InputDir::None => {}
             }
 
-            let d=go(self,world,i.property());
+            //println!("Move to do:{:?}",i);
 
-            match d{
-                Ok(_) => {}
-                Err(e) => {println!("Error move:{:?}",e)}
+            let cont=CONTENT.lock().unwrap().content.clone();
+            let quantity=CONTENT.lock().unwrap().quantity.clone();
+
+            match *i{
+                InputDir::Right(_,true) => {let d=put(self, world, cont, quantity, Direction::Right);println!("{:?}",d);},
+                InputDir::Left(_,true) => {let d=put(self, world,  cont, quantity, Direction::Left);println!("{:?}",d);}
+                InputDir::Top(_,true) => {let d=put(self, world, cont, quantity, Direction::Up);println!("{:?}",d);}
+                InputDir::Bottom(_,true) => {let d=put(self, world, cont, quantity, Direction::Down);println!("{:?}",d);}
+                _ => {
+                    let d=go(self,world,i.property());
+                    match d{
+                        Ok(_) => {}
+                        Err(e) => {println!("Error move:{:?}",e)}
+                    }
+                }
             }
+
+            *i=InputDir::None;
         }
 
         //We set the coordinate we arrived as true, so we won't go here again.
@@ -245,12 +351,20 @@ impl MyRobot{
 
                 let content=&map[i as usize][j as usize].as_ref().unwrap().content;
 
-                if content.to_default()==None || content.to_default()==Fire || content.to_default()==Tree(0) || content.to_default()==Bush(0) || content.to_default()==Fish(0) || content.to_default()==Rock(0) || content.to_default()==Coin(0) || content.to_default()==Garbage(0){continue}
+                if content.to_default()==None || content.to_default()==Fire || content.to_default()==Tree(0) || content.to_default()==Bush(0) || content.to_default()==Fish(0) || content.to_default()==Rock(0) || content.to_default()==Coin(0) || content.to_default()==Garbage(0) || content.to_default()==Market(0){continue}
+                else{
+                    if match content{
+                        Bin(a) => {if a.start==a.end{false}else{true}}
+                        Crate(a) => {if a.start==a.end{false}else{true}}
+                        Bank(a) => {if a.start==a.end{false}else{true}}
+                        _ => {true}
+                    }{
+                        self.interest_points.insert((i as usize,j as usize), content.clone());
+                    }
 
-                self.interest_points.insert((i as usize,j as usize), content.clone());
+                }
             }
         }
-
 
         for i in &self.interest_points{
             println!("At this coordinate:({},{}) there is {:?}",i.0.0,i.0.1,i.1);
@@ -287,7 +401,7 @@ impl MyRobot{
         let y=d.get_col();
 
         //I initialize the vector also used by the threads, which they will find the best path to it
-        let mut res_vet =PositionToGo::new_with_world(rob_map.clone(), x, y);
+        let mut res_vet =PositionToGo::new_with_world(&rob_map, x, y);
 
 
 
@@ -299,10 +413,10 @@ impl MyRobot{
         //We discover new tiles around us
         for i in res_vet.iter().enumerate(){
              match i.1{
-                 PositionToGo::Right => {if !is_not_visualize(x as i32, (y+ONE_DIRECTION_DISTANCE) as i32){let _=one_direction_view(self, world, Direction::Right, ONE_DIRECTION_DISTANCE);}},
-                 PositionToGo::Down => {if !is_not_visualize((x+ONE_DIRECTION_DISTANCE) as i32, y as i32){let _=one_direction_view(self, world, Direction::Down, ONE_DIRECTION_DISTANCE);}},
-                 PositionToGo::Left => {if !is_not_visualize(x as i32, (y-ONE_DIRECTION_DISTANCE) as i32){let _=one_direction_view(self, world, Direction::Left, ONE_DIRECTION_DISTANCE);}}
-                 PositionToGo::Top => {if !is_not_visualize((x-ONE_DIRECTION_DISTANCE)as i32, y as i32){let _=one_direction_view(self, world, Direction::Up, ONE_DIRECTION_DISTANCE);}}
+                 PositionToGo::Right => {if !is_not_visualize(x as i32, (y as i32+ONE_DIRECTION_DISTANCE as i32)){let _=one_direction_view(self, world, Direction::Right, ONE_DIRECTION_DISTANCE);}},
+                 PositionToGo::Down => {if !is_not_visualize((x as i32+ONE_DIRECTION_DISTANCE as i32), y as i32){let _=one_direction_view(self, world, Direction::Down, ONE_DIRECTION_DISTANCE);}},
+                 PositionToGo::Left => {if !is_not_visualize(x as i32, (y as i32-ONE_DIRECTION_DISTANCE as i32)){let _=one_direction_view(self, world, Direction::Left, ONE_DIRECTION_DISTANCE);}}
+                 PositionToGo::Top => {if !is_not_visualize((x as i32-ONE_DIRECTION_DISTANCE as i32), y as i32){let _=one_direction_view(self, world, Direction::Up, ONE_DIRECTION_DISTANCE);}}
                  _=>{},
              }
         }
@@ -315,14 +429,14 @@ impl MyRobot{
             //We set the first condition because we don't know if it can go out of bounds
             //We second conditions is set because we don't want to set a point to go which is "Lava", "DeepWater" or Tile=None.
             match i.1{
-                PositionToGo::Right => {if !is_not_visualize(x as i32, (y+ONE_DIRECTION_DISTANCE) as i32) && is_good_tile(&rob_map[x][y+ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::DownRight => {if !is_not_visualize((x+DISTANCE)as i32, (y+DISTANCE) as i32) && is_good_tile(&rob_map[x+DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Down => {if !is_not_visualize((x+ONE_DIRECTION_DISTANCE) as i32, y as i32) && is_good_tile(&rob_map[x+ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
-                PositionToGo::TopRight => {if !is_not_visualize((x-DISTANCE)as i32, (y+DISTANCE) as i32) && is_good_tile(&rob_map[x-DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Left => {if !is_not_visualize(x as i32, (y-ONE_DIRECTION_DISTANCE) as i32) && is_good_tile(&rob_map[x][y-ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::TopLeft => {if !is_not_visualize((x-DISTANCE)as i32, (y-DISTANCE) as i32) && is_good_tile(&rob_map[x-DISTANCE][y-DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Top => {if !is_not_visualize((x-ONE_DIRECTION_DISTANCE)as i32, y as i32) && is_good_tile(&rob_map[x-ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
-                PositionToGo::DownLeft => {if !is_not_visualize((x+DISTANCE)as i32, (y-DISTANCE) as i32) && is_good_tile(&rob_map[x+DISTANCE][y-DISTANCE]){result.push(i.1.clone());}}
+                PositionToGo::Right => {if !is_not_visualize(x as i32, (y as i32+ONE_DIRECTION_DISTANCE as i32)) && is_good_tile(&rob_map[x][y+ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::DownRight => {if !is_not_visualize((x as i32+DISTANCE as i32), (y as i32+DISTANCE as i32)) && is_good_tile(&rob_map[x+DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::Down => {if !is_not_visualize((x as i32+ONE_DIRECTION_DISTANCE as i32), y as i32) && is_good_tile(&rob_map[x+ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
+                PositionToGo::TopRight => {if !is_not_visualize((x as i32-DISTANCE as i32), (y as i32+DISTANCE as i32)) && is_good_tile(&rob_map[x-DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::Left => {if !is_not_visualize(x as i32, (y as i32-ONE_DIRECTION_DISTANCE as i32)) && is_good_tile(&rob_map[x][y-ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::TopLeft => {if !is_not_visualize((x as i32-DISTANCE as i32), (y as i32-DISTANCE as i32)) && is_good_tile(&rob_map[x-DISTANCE][y-DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::Top => {if !is_not_visualize((x as i32-ONE_DIRECTION_DISTANCE as i32), y as i32) && is_good_tile(&rob_map[x-ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
+                PositionToGo::DownLeft => {if !is_not_visualize((x as i32+DISTANCE as i32), (y as i32-DISTANCE as i32)) && is_good_tile(&rob_map[x+DISTANCE][y-DISTANCE]){result.push(i.1.clone());}}
             }
         }
 
@@ -364,7 +478,7 @@ impl MyRobot{
         let rob_map=robot_map(world).unwrap();
 
         //I initialize the vector also used by the threads, which they will find the best path to it
-        let res_vet=PositionToGo::new_with_world(rob_map,x,y);
+        let res_vet=PositionToGo::new_with_world(&rob_map,x,y);
 
         for i in &moves.path_to_follow{
             if *i==InputDir::None{continue}
@@ -408,7 +522,11 @@ impl MyRobot{
 
         cost+=cost_energy;
 
-        self.get_energy().has_enough_energy(cost)
+        if self.get_energy().get_energy_level()>500 && cost>1000{
+            false
+        }else{
+            self.get_energy().has_enough_energy(cost)
+        }
     }
 
     fn visualize_robot_map(&mut self,world:&mut World){
@@ -453,6 +571,62 @@ impl MyRobot{
         true
     }
 
+    fn get_content_backpack(&self)->(Content,usize){
+        let mut max_so_far:usize=0;
+        let mut cont=None;
+
+        for i in self.get_backpack().get_contents().iter(){
+            if i.0.to_default()==Garbage(0) && *i.1>=5{
+                return (i.0.clone(),*i.1);
+            }else if (i.0.to_default()==Garbage(0).to_default()|| i.0.to_default()==Coin(0)) && *i.1>max_so_far{
+                max_so_far=*i.1;
+                cont=i.0.clone();
+            }
+        }
+        (cont,max_so_far)
+    }
+
+    fn search_content(&self,content:Content,x:usize,y:usize)->(usize,usize){
+
+        let mut res_x=INFINITE;
+        let mut res_y=INFINITE;
+
+        for i in self.interest_points.iter(){
+            if i.1.to_default()==content{
+                if (x.abs_diff(i.0.0)+(y.abs_diff(i.0.1)))<(x.abs_diff(res_x)+y.abs_diff(res_y)){
+                    res_x=i.0.0;
+                    res_y=i.0.1;
+                }
+            }
+        }
+
+        (res_x,res_y)
+    }
+
+    fn container_exists(&self,content:&Content)->bool{
+        for i in self.interest_points.iter(){
+            if i.1.to_default()==*content{
+                return true;
+            }
+        }
+        false
+    }
+
+    fn backpack_contains_something(&self)->bool{
+        let map=self.get_backpack().get_contents();
+        let mut max:usize =0;
+        for i in map{
+            if *i.1>0{
+                max=*i.1;
+            }
+        }
+
+        if max>6{
+            true
+        }else{
+            false
+        }
+    }
 }
 
 struct MovesToFollow{
@@ -466,6 +640,15 @@ impl MovesToFollow{
             path_to_follow:Vec::new(),
             cost:0,
         }
+    }
+
+    fn is_done(&self)->bool{
+        for i in self.path_to_follow.iter(){
+            if *i!=InputDir::None{
+                return false;
+            }
+        }
+        true
     }
 
 }
@@ -498,7 +681,7 @@ impl PositionToGo{
         v
     }
 
-    fn new_with_world(rob_map:Vec<Vec<Option<Tile>>>,x:usize,y:usize)->Vec<PositionToGo>{
+    fn new_with_world(rob_map:&Vec<Vec<Option<Tile>>>,x:usize,y:usize)->Vec<PositionToGo>{
 
         let iter_me=[PositionToGo::Down, PositionToGo::DownRight,
             PositionToGo::Right, PositionToGo::TopRight, PositionToGo::Top,
@@ -556,6 +739,32 @@ impl PositionToGo{
 
         v
     }
+    fn new_already_seen_without_rob(rob_map:&Vec<Vec<Option<Tile>>>,x:usize,y:usize)->Vec<PositionToGo>{
+        let iter_me=[PositionToGo::Down, PositionToGo::DownRight,
+            PositionToGo::Right, PositionToGo::TopRight, PositionToGo::Top,
+            PositionToGo::TopLeft, PositionToGo::Left, PositionToGo::DownLeft];
+
+
+        let mut v=Vec::new();
+
+        for i in iter_me{
+            let position=i.clone();
+
+            let (ds_x,ds_y)=get_next_position(i);
+
+            let destination_x=(x as i32)+ds_x;
+            let destination_y=(y as i32)+ds_y;
+
+
+            if is_not_visualize(destination_x, destination_y){ continue }
+
+            if is_good_tile(&rob_map[destination_x as usize][destination_y as usize]){
+                v.push(position);
+            }
+        }
+
+        v
+    }
 
 }
 
@@ -570,7 +779,7 @@ fn main() {
     let mut run = Runner::new(Box::new(r), &mut g).unwrap();
 
 
-    for _ in 0..30{
+    for _ in 0..100{
         loop {
             let _ = run.game_tick();
             if !*WAIT_FOR_ENERGY.lock().unwrap(){
@@ -578,6 +787,7 @@ fn main() {
             }
         }
 
+        // We use this mutex as a semaphore
         *RECHARGE.lock().unwrap()=true;
 
 
@@ -709,7 +919,6 @@ fn main() {
 
                     //println!("I got weight:{},distance:{}, cost:{}",value.weight,value.distanze_from_dest,value.cost);
 
-
                     if value.distanze_from_dest<=min_so_far.distanze_from_dest{
                         if value.weight==min_so_far.weight{
                             if value.cost<min_so_far.cost{
@@ -720,6 +929,7 @@ fn main() {
                         }
                     }
                 }
+
                 //We are going to leave the loop only if the result distance is at least lower than 1.
                 //If it doesn't work we will try again.
                 //We need to add some conditions, because it might get stucked if we are close to the deep water
@@ -730,14 +940,20 @@ fn main() {
                     if min_so_far.distanze_from_dest<=2{
                         thread_flag=false;
                     }
-                }else if counter_try>10{
+                }else if counter_try>10 && counter_try<=15{
+                    *POSITIONS_TO_GO.lock().unwrap()=PositionToGo::new_already_seen_without_rob(&map,x,y);
+                    if min_so_far.distanze_from_dest<=4{
+                        thread_flag=false;
+                    }
+                }else if counter_try>15{
                     println!("Error in the calculation of the path");
                     return GeneticSearch::default();
                 }
             }
 
-            println!("\n\nPath to follow:");
-            println!("I got weight:{},distance:{}, cost:{} and this series:{:?}\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost,min_so_far.vector);
+            println!("Path to follow:");
+            //println!("I got weight:{},distance:{}, cost:{} and this series:{:?}\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost,min_so_far.vector);
+            println!("I got weight:{},distance:{}, cost:{}\n\n\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost);
 
             min_so_far
 
@@ -751,6 +967,7 @@ fn main() {
 
         //We wait for the thread, which contains all the other threads, to finish
         let t=time.join().unwrap();
+
         //Check if we got an error in the calculation
         if t.weight>=1000{
             return;

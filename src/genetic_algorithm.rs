@@ -4,17 +4,22 @@ use robotics_lib::interface::Direction;
 use std::collections::HashSet;
 use robotics_lib::world::tile::Tile;
 use std::sync::Arc;
+use charting_tools::charted_coordinate::ChartedCoordinate;
 use robotics_lib::utils::calculate_cost_go_with_environment;
-use robotics_lib::world::tile::Content::Rock;
+use robotics_lib::world::tile::Content::{Coin, Garbage, Rock};
 use crate::helpers_functions::{direction_value, is_good_tile, is_not_visualize};
 use crate::ENVIRONMENT;
 
+
+//I set two bools for the InputDir:
+//The first if we need to destroy something.
+//The second if we need to put something. (I am lazy)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputDir{
-    Right(bool),
-    Left(bool),
-    Top(bool),
-    Bottom(bool),
+    Right(bool,bool),
+    Left(bool,bool),
+    Top(bool,bool),
+    Bottom(bool,bool),
     None
 }
 
@@ -23,10 +28,10 @@ impl InputDir{
     fn is_reverse(&self, other:&InputDir)->bool{
 
         match self{
-            InputDir::Top(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Bottom(false) ){true} else {false}},
-            InputDir::Left(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Right(false)) {true} else {false}},
-            InputDir::Bottom(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Top(false)) {true} else {false}},
-            InputDir::Right(_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Left(false)) {true} else {false}}
+            InputDir::Top(_,_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Bottom(false,false) ){true} else {false}},
+            InputDir::Left(_,_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Right(false,false)) {true} else {false}},
+            InputDir::Bottom(_,_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Top(false,false)) {true} else {false}},
+            InputDir::Right(_,_)=>{if std::mem::discriminant(other)==std::mem::discriminant(&InputDir::Left(false,false)) {true} else {false}}
             _ => {false}
         }
 
@@ -34,10 +39,10 @@ impl InputDir{
 
     pub(crate) fn property(&self) ->Direction{
         match self{
-            InputDir::Right(_) => Direction::Right,
-            InputDir::Left(_) => Direction::Left,
-            InputDir::Top(_) => Direction::Up,
-            InputDir::Bottom(_)=> Direction::Down,
+            InputDir::Right(_,_) => Direction::Right,
+            InputDir::Left(_,_) => Direction::Left,
+            InputDir::Top(_,_) => Direction::Up,
+            InputDir::Bottom(_,_)=> Direction::Down,
             _=>{Direction::Down}
         }
     }
@@ -47,12 +52,31 @@ impl InputDir{
         let t: i32 =rng.gen_range(0..5);
 
         match t{
-            0=>InputDir::Bottom(false),
-            1=>InputDir::Left(false),
+            0=>InputDir::Bottom(false,false),
+            1=>InputDir::Left(false,false),
             2=>InputDir::None,
-            3=>InputDir::Right(false),
-            _=>InputDir::Top(false),
+            3=>InputDir::Right(false,false),
+            _=>InputDir::Top(false,false),
         }
+    }
+
+    pub fn convert_to_input_dir(mut x:i32,mut y:i32,vet:Vec<ChartedCoordinate>)->Vec<InputDir>{
+
+        /// PROBLEM WITH THE CONVERTER
+        let mut result=Vec::new();
+        for i in vet{
+            result.push(match (i.0 as i32-x,i.1 as i32-y){
+                (0,1)=>InputDir::Right(false,false),
+                (0,-1)=>InputDir::Left(false,false),
+                (1,0)=>InputDir::Bottom(false,false),
+                (-1,0)=>InputDir::Top(false,false),
+                _=>{InputDir::None}
+            });
+
+            x=i.0 as i32;
+            y=i.1 as i32;
+        }
+        result
     }
 }
 
@@ -153,7 +177,7 @@ impl GeneticSearch{
                 while *ele!=e{
                     e=InputDir::random_input_dir();
                 }
-                *ele=e;
+                *ele=InputDir::None;
                 continue;
             }
 
@@ -168,7 +192,7 @@ impl GeneticSearch{
             if inside_thread_map[next_x as usize][next_y as usize].is_some(){
                 let tile=inside_thread_map[next_x as usize][next_y as usize].as_ref().unwrap();
 
-                if !set.contains(&(next_x, next_y)) && (tile.content.to_default()==Rock(0)){
+                if !set.contains(&(next_x, next_y)) && (tile.content.to_default()==Coin(0) || tile.content.to_default()==Garbage(0)){
 
                     object_destroy+=1;
 
@@ -182,19 +206,19 @@ impl GeneticSearch{
                     let element=ele.clone();
 
                     *ele=match element{
-                        InputDir::Right(_) => InputDir::Right(true),
-                        InputDir::Left(_) => InputDir::Left(true),
-                        InputDir::Top(_) => InputDir::Top(true),
-                        InputDir::Bottom(_) => InputDir::Top(true),
+                        InputDir::Right(_,_) => InputDir::Right(true,false),
+                        InputDir::Left(_,_) => InputDir::Left(true,false),
+                        InputDir::Top(_,_) => InputDir::Top(true,false),
+                        InputDir::Bottom(_,_) => InputDir::Top(true,false),
                         InputDir::None => InputDir::None,
                     }
                 }else{
                     let element=ele.clone();
                     *ele=match element{
-                        InputDir::Right(_) => InputDir::Right(false),
-                        InputDir::Left(_) => InputDir::Left(false),
-                        InputDir::Top(_) => InputDir::Top(false),
-                        InputDir::Bottom(_) => InputDir::Top(false),
+                        InputDir::Right(_,_) => InputDir::Right(false,false),
+                        InputDir::Left(_,_) => InputDir::Left(false,false),
+                        InputDir::Top(_,_) => InputDir::Top(false,false),
+                        InputDir::Bottom(_,_) => InputDir::Top(false,false),
                         InputDir::None => InputDir::None,
                     }
                 }
