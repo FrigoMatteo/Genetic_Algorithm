@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
-use rand::Rng;
 use robotics_lib::energy::Energy;
 use robotics_lib::event::events::Event;
 use robotics_lib::interface::{debug, destroy, Direction, go, look_at_sky, one_direction_view, put, robot_map};
@@ -20,7 +19,6 @@ use robotics_lib::utils::LibError;
 use robotics_lib::utils::LibError::{NotEnoughEnergy, OperationNotAllowed};
 use robotics_lib::world::environmental_conditions::EnvironmentalConditions;
 
-use sense_and_find_by_rustafariani;
 use rust_eze_spotlight::Spotlight;
 use ghost_amazeing_island::world_generator::*;
 use charting_tools::ChartingTools;
@@ -36,9 +34,9 @@ use lazy_static::lazy_static;
 pub static DISTANCE:usize=4;
 pub static ONE_DIRECTION_DISTANCE:usize=8;
 pub static INFINITE:usize=10000;
-static WORLD_SIZE:usize=300;
+static WORLD_SIZE:usize=500;
 static INPUT_DIR_SIZE:usize=18;
-static GENERATION_LIMIT:usize=120;
+static GENERATION_LIMIT:usize=180;
 static POPULATION_NUMBER:usize=8;
 
 
@@ -129,23 +127,18 @@ impl Runnable for MyRobot {
         //check backpack:
         if self.backpack_contains_something(){
             let (content,size)=self.get_content_backpack();
-            println!("Content to search:{:?}",content);
+            println!("Content to search:{:?} and size:{}",content,size);
 
-            let mut search=match content {
-                Garbage(_) => {Bin(0..0)}
-                Coin(_) => {Bank(0..0)}
-                _=>{None}
-            };
-
-
-            /* Doesn't work since the crate accepts only wood
-            //If we don't find the specified container, we can insert the values inside the crate.
-            if !self.container_exists(&search) && self.get_backpack().get_contents()[&content]>=10{
-                search=Crate(0..0);
-            }
-             */
+            let search=self.search_respective_content(&content);
 
             if search!=None && self.container_exists(&search){
+                println!("Size backpack:{}",self.get_backpack().get_size());
+                for i in self.get_backpack().get_contents().iter(){
+                    if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0) || i.0.to_default()==Garbage(0) || i.0.to_default()==Tree(0){
+                        println!("Size of {}:{}",i.0.to_default(),i.1);
+                    }
+                }
+
                 let (dest_x,dest_y)=self.search_content(search,d.get_row(),d.get_col());
 
                 let mut charted_path = ChartingTools::tool::<ChartedPaths>().unwrap();
@@ -178,10 +171,12 @@ impl Runnable for MyRobot {
                     };
                     result_path.push(dir);
 
-                    println!("\nPath with chartedPath:");
-                    for i in &result_path{
+                    ///ERROR IN THE EXECUTION OF THE PATH
+                    println!("Charted path found");
+                    for i in result_path.iter(){
                         println!("{:?}",i);
                     }
+                    println!("Costo:{}",path.0);//Problema se il costo supera i 1000.
                     FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=result_path;
                     *WAIT_FOR_ENERGY.lock().unwrap()=true;
                     return;
@@ -215,12 +210,6 @@ impl Runnable for MyRobot {
         self.save_contents(world);
 
         //println!("\nMy coordinates:{:?}",self.get_coordinate());
-        println!("Size backpack:{}",self.get_backpack().get_size());
-        for i in self.get_backpack().get_contents().iter(){
-            if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0) || i.0.to_default()==Garbage(0) || i.0.to_default()==Tree(0){
-                println!("Size of {}:{}",i.0.to_default(),i.1);
-            }
-        }
 
         /*
         let wh=put(self,world,Garbage(0),5,Direction::Right);
@@ -401,7 +390,7 @@ impl MyRobot{
         let y=d.get_col();
 
         //I initialize the vector also used by the threads, which they will find the best path to it
-        let mut res_vet =PositionToGo::new_with_world(&rob_map, x, y);
+        let res_vet =PositionToGo::new_with_world(&rob_map, x, y);
 
 
 
@@ -413,10 +402,10 @@ impl MyRobot{
         //We discover new tiles around us
         for i in res_vet.iter().enumerate(){
              match i.1{
-                 PositionToGo::Right => {if !is_not_visualize(x as i32, (y as i32+ONE_DIRECTION_DISTANCE as i32)){let _=one_direction_view(self, world, Direction::Right, ONE_DIRECTION_DISTANCE);}},
-                 PositionToGo::Down => {if !is_not_visualize((x as i32+ONE_DIRECTION_DISTANCE as i32), y as i32){let _=one_direction_view(self, world, Direction::Down, ONE_DIRECTION_DISTANCE);}},
-                 PositionToGo::Left => {if !is_not_visualize(x as i32, (y as i32-ONE_DIRECTION_DISTANCE as i32)){let _=one_direction_view(self, world, Direction::Left, ONE_DIRECTION_DISTANCE);}}
-                 PositionToGo::Top => {if !is_not_visualize((x as i32-ONE_DIRECTION_DISTANCE as i32), y as i32){let _=one_direction_view(self, world, Direction::Up, ONE_DIRECTION_DISTANCE);}}
+                 PositionToGo::Right => {if !is_not_visualize(x as i32, y as i32+ONE_DIRECTION_DISTANCE as i32){let _=one_direction_view(self, world, Direction::Right, ONE_DIRECTION_DISTANCE);}},
+                 PositionToGo::Down => {if !is_not_visualize(x as i32+ONE_DIRECTION_DISTANCE as i32, y as i32){let _=one_direction_view(self, world, Direction::Down, ONE_DIRECTION_DISTANCE);}},
+                 PositionToGo::Left => {if !is_not_visualize(x as i32, y as i32-ONE_DIRECTION_DISTANCE as i32){let _=one_direction_view(self, world, Direction::Left, ONE_DIRECTION_DISTANCE);}}
+                 PositionToGo::Top => {if !is_not_visualize(x as i32-ONE_DIRECTION_DISTANCE as i32, y as i32){let _=one_direction_view(self, world, Direction::Up, ONE_DIRECTION_DISTANCE);}}
                  _=>{},
              }
         }
@@ -429,14 +418,14 @@ impl MyRobot{
             //We set the first condition because we don't know if it can go out of bounds
             //We second conditions is set because we don't want to set a point to go which is "Lava", "DeepWater" or Tile=None.
             match i.1{
-                PositionToGo::Right => {if !is_not_visualize(x as i32, (y as i32+ONE_DIRECTION_DISTANCE as i32)) && is_good_tile(&rob_map[x][y+ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::DownRight => {if !is_not_visualize((x as i32+DISTANCE as i32), (y as i32+DISTANCE as i32)) && is_good_tile(&rob_map[x+DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Down => {if !is_not_visualize((x as i32+ONE_DIRECTION_DISTANCE as i32), y as i32) && is_good_tile(&rob_map[x+ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
-                PositionToGo::TopRight => {if !is_not_visualize((x as i32-DISTANCE as i32), (y as i32+DISTANCE as i32)) && is_good_tile(&rob_map[x-DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Left => {if !is_not_visualize(x as i32, (y as i32-ONE_DIRECTION_DISTANCE as i32)) && is_good_tile(&rob_map[x][y-ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::TopLeft => {if !is_not_visualize((x as i32-DISTANCE as i32), (y as i32-DISTANCE as i32)) && is_good_tile(&rob_map[x-DISTANCE][y-DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Top => {if !is_not_visualize((x as i32-ONE_DIRECTION_DISTANCE as i32), y as i32) && is_good_tile(&rob_map[x-ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
-                PositionToGo::DownLeft => {if !is_not_visualize((x as i32+DISTANCE as i32), (y as i32-DISTANCE as i32)) && is_good_tile(&rob_map[x+DISTANCE][y-DISTANCE]){result.push(i.1.clone());}}
+                PositionToGo::Right => {if !is_not_visualize(x as i32, y as i32+ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y+ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::DownRight => {if !is_not_visualize(x as i32+DISTANCE as i32, y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::Down => {if !is_not_visualize(x as i32+ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x+ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
+                PositionToGo::TopRight => {if !is_not_visualize(x as i32-DISTANCE as i32,y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::Left => {if !is_not_visualize(x as i32, y as i32-ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y-ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::TopLeft => {if !is_not_visualize(x as i32-DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y-DISTANCE]){result.push(i.1.clone());}},
+                PositionToGo::Top => {if !is_not_visualize(x as i32-ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x-ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
+                PositionToGo::DownLeft => {if !is_not_visualize(x as i32+DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y-DISTANCE]){result.push(i.1.clone());}}
             }
         }
 
@@ -555,7 +544,7 @@ impl MyRobot{
         if *RECHARGE.lock().unwrap(){
             return false;
         }
-        let mut follow_dir=FOLLOW_DIRECTIONS.lock().unwrap();
+        let follow_dir=FOLLOW_DIRECTIONS.lock().unwrap();
 
 
         // Do we need to do some free cycles because we don't have enough energy?
@@ -612,16 +601,23 @@ impl MyRobot{
         false
     }
 
+    fn search_respective_content(&self,content:&Content)->Content{
+        match content {
+            Garbage(_) => {Bin(0..0)}
+            Coin(_) => {Bank(0..0)}
+            _=>{None}
+        }
+    }
+
     fn backpack_contains_something(&self)->bool{
         let map=self.get_backpack().get_contents();
         let mut max:usize =0;
         for i in map{
-            if *i.1>0{
+            if *i.1>max && self.container_exists(&self.search_respective_content(i.0)){
                 max=*i.1;
             }
         }
-
-        if max>6{
+        if max>5{
             true
         }else{
             false
@@ -773,7 +769,7 @@ fn main() {
 
     let r = MyRobot::new();
 
-    let mut g = WorldGenerator::new(300, true, 0, 0.1);
+    let mut g = WorldGenerator::new(WORLD_SIZE.clone() as u32, true, 0, 0.1);
 
 
     let mut run = Runner::new(Box::new(r), &mut g).unwrap();
@@ -834,15 +830,11 @@ fn main() {
 
                         //Initial population
                         for _ in 0..POPULATION_NUMBER{
-                            let n=GeneticSearch::new(INPUT_DIR_SIZE,x as i32,y as i32);
+                            let n=GeneticSearch::new(INPUT_DIR_SIZE,x as i32,y as i32,&inside_thread_map);
                             genetic_set.push(n);
                         }
 
-
                         let mut f=true;
-                        let mut counter=0;
-                        let mut index_save=0;
-                        let mut new_index=0;
 
                         let dest_x=(x as i32+destination_x) as usize;
                         let dest_y=(y as i32+destination_y) as usize;
@@ -851,18 +843,13 @@ fn main() {
                         for _ in 0..GENERATION_LIMIT{
                             //I fixed the generation limit to 100, which is optimal, since also the children learn from the parents.
 
-
-                            counter+=1;
                             //Genetic Fitness, we calculate the weight of the random generated directions
                             for i in genetic_set.iter_mut(){
                                 i.genetic_cost(&inside_thread_map,(dest_x,dest_y));
-                                if f && i.distanze_from_dest==0{
-                                    index_save=counter;
-                                    new_index=index_save+30;
-                                    f=false;
-                                }
-                            }
 
+                                if f && i.distanze_from_dest==0{ f=false; }
+
+                            }
 
                             //Genetic Selection: we take an elite set and one based on probability.
                             //This way, also the children can learn.
@@ -941,7 +928,13 @@ fn main() {
                         thread_flag=false;
                     }
                 }else if counter_try>10 && counter_try<=15{
-                    *POSITIONS_TO_GO.lock().unwrap()=PositionToGo::new_already_seen_without_rob(&map,x,y);
+                    let pos=PositionToGo::new_already_seen_without_rob(&map,x,y);
+                    *POSITIONS_TO_GO.lock().unwrap()=pos.clone();
+                    for i in pos{
+                        println!("Position:{:?}",i);
+                    }
+                    println!("I got weight:{},distance:{}, cost:{}",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost);
+                    println!("\n");
                     if min_so_far.distanze_from_dest<=4{
                         thread_flag=false;
                     }
@@ -950,7 +943,6 @@ fn main() {
                     return GeneticSearch::default();
                 }
             }
-
             println!("Path to follow:");
             //println!("I got weight:{},distance:{}, cost:{} and this series:{:?}\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost,min_so_far.vector);
             println!("I got weight:{},distance:{}, cost:{}\n\n\n",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost);

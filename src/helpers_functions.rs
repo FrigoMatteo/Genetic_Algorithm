@@ -45,7 +45,7 @@ pub(crate) fn is_good_tile(data:&Option<Tile>) ->bool{
 }
 
 pub(crate) fn is_not_visualize(next_x:i32, next_y:i32) ->bool{
-    if next_y>=WORLD_SIZE as i32|| next_x>=WORLD_SIZE as i32 || next_x<0 || next_y<0 {
+    if next_y>WORLD_SIZE as i32|| next_x>WORLD_SIZE as i32 || next_x<0 || next_y<0 {
         true
     }else{
         false

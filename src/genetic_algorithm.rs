@@ -6,7 +6,8 @@ use robotics_lib::world::tile::Tile;
 use std::sync::Arc;
 use charting_tools::charted_coordinate::ChartedCoordinate;
 use robotics_lib::utils::calculate_cost_go_with_environment;
-use robotics_lib::world::tile::Content::{Coin, Garbage, Rock};
+use robotics_lib::world::tile::Content::{Coin, Garbage, Tree};
+use robotics_lib::world::tile::TileType::ShallowWater;
 use crate::helpers_functions::{direction_value, is_good_tile, is_not_visualize};
 use crate::ENVIRONMENT;
 
@@ -62,21 +63,34 @@ impl InputDir{
 
     pub fn convert_to_input_dir(mut x:i32,mut y:i32,vet:Vec<ChartedCoordinate>)->Vec<InputDir>{
 
-        /// PROBLEM WITH THE CONVERTER
         let mut result=Vec::new();
         for i in vet{
-            result.push(match (i.0 as i32-x,i.1 as i32-y){
-                (0,1)=>InputDir::Right(false,false),
-                (0,-1)=>InputDir::Left(false,false),
-                (1,0)=>InputDir::Bottom(false,false),
-                (-1,0)=>InputDir::Top(false,false),
-                _=>{InputDir::None}
-            });
+            result.push(InputDir::convert_int_to_input_dir(x, y, i.0 as i32, i.1 as i32));
 
             x=i.0 as i32;
             y=i.1 as i32;
         }
         result
+    }
+
+    fn convert_int_to_input_dir(x:i32,y:i32,x1:i32,y1:i32)->InputDir{
+        match (x1-x,y1-y){
+            (0,1)=>InputDir::Right(false,false),
+            (0,-1)=>InputDir::Left(false,false),
+            (1,0)=>InputDir::Bottom(false,false),
+            (-1,0)=>InputDir::Top(false,false),
+            _=>{InputDir::None}
+        }
+    }
+
+    fn convert_to_int(i:&InputDir)->(i32,i32){
+        match i{
+            InputDir::Right(_, _) => {(0,1)}
+            InputDir::Left(_, _) => {(0,-1)}
+            InputDir::Top(_, _) => {(-1,0)}
+            InputDir::Bottom(_, _) => {(1,0)}
+            InputDir::None => {(0,0)}
+        }
     }
 }
 
@@ -106,7 +120,7 @@ impl Default for GeneticSearch{
 
 impl GeneticSearch{
 
-    pub(crate) fn new(n:usize, x:i32, y:i32) ->Self{
+    pub(crate) fn new(n:usize, x:i32, y:i32,inside_thread_map:&Arc<Vec<Vec<Option<Tile>>>>) ->Self{
         let mut g=GeneticSearch{
             vector:Vec::new(),
             cost:INFINITE,
@@ -116,7 +130,7 @@ impl GeneticSearch{
             weight:1000,
         };
 
-        g.generate_random_sequence(n);
+        g.generate_random_sequence(n,x,y,inside_thread_map);
         g
     }
 
@@ -131,11 +145,40 @@ impl GeneticSearch{
         }
     }
 
-    fn generate_random_sequence(&mut self,n:usize){
+    fn generate_random_sequence(&mut self,n:usize,mut x:i32, mut y:i32,inside_thread_map:&Arc<Vec<Vec<Option<Tile>>>>){
+
+        let mut x_dem=x;
+        let mut y_dem=y;
+
         for _ in 0..n{
+            let mut dir=InputDir::random_input_dir();
+
+            (x_dem,y_dem)=InputDir::convert_to_int(&dir);
+
+            let mut x_s=x+x_dem;
+            let mut y_s=y+y_dem;
+
+            if is_not_visualize(x_s,y_s){self.vector.push(InputDir::None);continue;}
+
+            while !is_good_tile(&inside_thread_map[x_s as usize][y_s as usize]){
+                x_s=x;
+                y_s=y;
+
+                dir=InputDir::random_input_dir();
+
+                (x_dem,y_dem)=InputDir::convert_to_int(&dir);
+
+                x_s+=x_dem;
+                y_s+=y_dem;
+
+                if is_not_visualize(x,y){dir=InputDir::None;break;}
+            }
+
+            x=x_s;
+            y=y_s;
 
             //The rng is used because it is faster to catch the generated value if we have to launch it a lot of times.
-            self.vector.push(InputDir::random_input_dir());
+            self.vector.push(dir);
 
         }
 
@@ -153,6 +196,8 @@ impl GeneticSearch{
         let mut null_block=0;
 
         let mut object_destroy=0;
+
+        let mut sha_water=0;
 
         let mut set:HashSet<(i32,i32)>=HashSet::new();
 
@@ -173,11 +218,13 @@ impl GeneticSearch{
 
             if !is_good_tile(&inside_thread_map[next_x as usize][next_y as usize]){
                 null_block+=1;
+                /*
                 let mut e =ele.clone();
                 while *ele!=e{
                     e=InputDir::random_input_dir();
                 }
                 *ele=InputDir::None;
+                 */
                 continue;
             }
 
@@ -189,10 +236,18 @@ impl GeneticSearch{
                     inside_thread_map);
             }
 
+
             if inside_thread_map[next_x as usize][next_y as usize].is_some(){
                 let tile=inside_thread_map[next_x as usize][next_y as usize].as_ref().unwrap();
 
-                if !set.contains(&(next_x, next_y)) && (tile.content.to_default()==Coin(0) || tile.content.to_default()==Garbage(0)){
+                //Because the shallow water doesn't cost much and he keeps walking in there.
+                if tile.tile_type==ShallowWater{
+                    sha_water+=1;
+                }
+
+
+                // We check if the next tile contains the contents we search.
+                if !set.contains(&(next_x, next_y)) && (tile.content.to_default()==Coin(0) || tile.content.to_default()==Garbage(0) || tile.content.to_default()==Tree(0)){
 
                     object_destroy+=1;
 
@@ -232,10 +287,10 @@ impl GeneticSearch{
 
 
         //Checking backtracking:
-        ///
-        /// self.vector=[Right, Right, Left, Left]
-        ///
-        /// BackTracking=2
+        //
+        // self.vector=[Right, Right, Left, Left]
+        //
+        // BackTracking=2
         //I want to penalize the fact that he waste those 4 actions
 
         let mut vet=Vec::new();
@@ -254,8 +309,10 @@ impl GeneticSearch{
             }
         }
 
-        //We fixed the weight based on the cost(10%)+backtracking(30%)+null_block(30%)-object_destroyed(30%)
-        self.weight=((self.cost as f32*0.1)+((backtracking*10)as f32*0.3)+((null_block*10)as f32*0.3)-((object_destroy*10)as f32*0.3)) as i32;
+        //We fixed the weight based on the cost(10%)+backtracking(25%)+null_block(25%)-object_destroyed(25%)+shallow water(15%)
+        //I also put a weight on the shallow water since it doesn't cost much and he keep walking in there.
+
+        self.weight=((self.cost as f32*0.1)+((backtracking*10)as f32*0.25)+((null_block*10)as f32*0.25)-((object_destroy*10)as f32*0.25)+((sha_water*30)as f32*0.15)) as i32;
         //println!("Specific weight:{}",self.weight);
     }
 
