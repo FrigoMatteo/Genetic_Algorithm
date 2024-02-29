@@ -61,6 +61,54 @@ impl InputDir{
         }
     }
 
+    fn random_input_without_i(i:&InputDir)->InputDir{
+        let mut rng =thread_rng();
+        let t: i32 =rng.gen_range(0..4);
+
+        match i{
+            InputDir::Right(_, _) => {
+                match t{
+                    0=>InputDir::Bottom(false,false),
+                    1=>InputDir::Left(false,false),
+                    2=>InputDir::None,
+                    _=>InputDir::Top(false,false),
+                }
+            }
+            InputDir::Left(_, _) => {
+                match t{
+                    0=>InputDir::Bottom(false,false),
+                    1=>InputDir::None,
+                    2=>InputDir::Right(false,false),
+                    _=>InputDir::Top(false,false),
+                }
+            }
+            InputDir::Top(_, _) => {
+                match t{
+                    0=>InputDir::Bottom(false,false),
+                    1=>InputDir::Left(false,false),
+                    2=>InputDir::None,
+                    _=>InputDir::Right(false,false),
+                }
+            }
+            InputDir::Bottom(_, _) => {
+                match t{
+                    0=>InputDir::Left(false,false),
+                    1=>InputDir::None,
+                    2=>InputDir::Right(false,false),
+                    _=>InputDir::Top(false,false),
+                }
+            }
+            InputDir::None => {
+                match t{
+                    0=>InputDir::Bottom(false,false),
+                    1=>InputDir::Left(false,false),
+                    2=>InputDir::Right(false,false),
+                    _=>InputDir::Top(false,false),
+                }
+            }
+        }
+    }
+
     pub fn convert_to_input_dir(mut x:i32,mut y:i32,vet:Vec<ChartedCoordinate>)->Vec<InputDir>{
 
         let mut result=Vec::new();
@@ -158,7 +206,14 @@ impl GeneticSearch{
             let mut x_s=x+x_dem;
             let mut y_s=y+y_dem;
 
-            if is_not_visualize(x_s,y_s){self.vector.push(InputDir::None);continue;}
+            if is_not_visualize(x_s,y_s) || inside_thread_map[x_s as usize][y_s as usize].is_none(){self.vector.push(InputDir::None);continue;}
+
+            if x_s<0{
+                x_s=0;
+            }
+            if y_s<0 {
+                y_s=0;
+            }
 
             while !is_good_tile(&inside_thread_map[x_s as usize][y_s as usize]){
                 x_s=x;
@@ -188,8 +243,8 @@ impl GeneticSearch{
         let mut x=self.start_x;
         let mut y=self.start_y;
 
-        let mut next_x=0;
-        let mut next_y=0;
+        let mut next_x=x;
+        let mut next_y=y;
 
         let mut backtracking=0;
 
@@ -204,6 +259,7 @@ impl GeneticSearch{
         self.cost=0;
 
         for ele in self.vector.iter_mut(){
+
             let (i,j)=direction_value(ele);
 
             next_x=x+i;
@@ -218,16 +274,58 @@ impl GeneticSearch{
 
             if !is_good_tile(&inside_thread_map[next_x as usize][next_y as usize]){
                 null_block+=1;
-                /*
+
                 let mut e =ele.clone();
-                while *ele!=e{
-                    e=InputDir::random_input_dir();
+
+
+                let mut save_x=x+direction_value(&e).0;
+
+                if save_x<0{
+                    save_x=0
                 }
-                *ele=InputDir::None;
-                 */
-                continue;
+
+                let mut save_y=y+direction_value(&e).1;
+
+                if save_y<0{
+                    save_y=0;
+                }
+
+
+                while e==*ele ||
+                    is_not_visualize(save_x, save_y) ||
+                    inside_thread_map[save_x as usize][save_y as usize].is_none() ||
+                    !is_good_tile(&inside_thread_map[save_x as usize][save_y as usize]) {
+
+                    e=InputDir::random_input_without_i(&e);
+
+                    save_x=x+direction_value(&e).0;
+
+                    if save_x<0{
+                        save_x=0;
+                    }
+
+                    save_y=y+direction_value(&e).1;
+
+                    if save_y<0{
+                        save_y=0;
+                    }
+
+                }
+
+                *ele=e;
+
+                let (i,j)=direction_value(ele);
+                next_x=x+i;
+                next_y=y+j;
             }
 
+
+            if next_x<0{
+                next_x=0;
+            }
+            if next_y<0{
+                next_y=0;
+            }
 
             if *ele!=InputDir::None{
                 self.cost=self.cost+genetic_cost(
@@ -264,7 +362,7 @@ impl GeneticSearch{
                         InputDir::Right(_,_) => InputDir::Right(true,false),
                         InputDir::Left(_,_) => InputDir::Left(true,false),
                         InputDir::Top(_,_) => InputDir::Top(true,false),
-                        InputDir::Bottom(_,_) => InputDir::Top(true,false),
+                        InputDir::Bottom(_,_) => InputDir::Bottom(true,false),
                         InputDir::None => InputDir::None,
                     }
                 }else{
@@ -273,14 +371,16 @@ impl GeneticSearch{
                         InputDir::Right(_,_) => InputDir::Right(false,false),
                         InputDir::Left(_,_) => InputDir::Left(false,false),
                         InputDir::Top(_,_) => InputDir::Top(false,false),
-                        InputDir::Bottom(_,_) => InputDir::Top(false,false),
+                        InputDir::Bottom(_,_) => InputDir::Bottom(false,false),
                         InputDir::None => InputDir::None,
                     }
                 }
             }
 
-            x=next_x;
-            y=next_y;
+            if is_good_tile(&inside_thread_map[next_x as usize][next_y as usize]){
+                x=next_x;
+                y=next_y;
+            }
 
         }
         self.distanze_from_dest=(x-destination.0 as i32).abs()+(y-destination.1 as i32).abs();
@@ -312,7 +412,7 @@ impl GeneticSearch{
         //We fixed the weight based on the cost(10%)+backtracking(25%)+null_block(25%)-object_destroyed(25%)+shallow water(15%)
         //I also put a weight on the shallow water since it doesn't cost much and he keep walking in there.
 
-        self.weight=((self.cost as f32*0.1)+((backtracking*10)as f32*0.25)+((null_block*10)as f32*0.25)-((object_destroy*10)as f32*0.25)+((sha_water*30)as f32*0.15)) as i32;
+        self.weight=((self.cost as f32*0.01)+((backtracking*10)as f32*0.15)+((null_block*10)as f32*0.25)-((object_destroy*10)as f32*0.25)+((sha_water*50)as f32*0.34)) as i32;
         //println!("Specific weight:{}",self.weight);
     }
 

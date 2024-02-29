@@ -2,6 +2,7 @@ mod export_of_image;
 mod genetic_algorithm;
 mod helpers_functions;
 
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
@@ -23,20 +24,23 @@ use rust_eze_spotlight::Spotlight;
 use ghost_amazeing_island::world_generator::*;
 use charting_tools::ChartingTools;
 use charting_tools::charted_coordinate::ChartedCoordinate;
+use charting_tools::charted_map::MapKey;
 use charting_tools::charted_paths::ChartedPaths;
 
 use genetic_algorithm::{InputDir,GeneticSearch,genetic_selection,genetic_mutation,genetic_crossover};
 use helpers_functions::{get_next_position,is_not_visualize,is_good_tile,direction_value};
 
 use lazy_static::lazy_static;
+use robotics_lib::world::tile::TileType::ShallowWater;
+use crate::helpers_functions::{already_visited, calculate_cost_dir};
 
 
 pub static DISTANCE:usize=4;
 pub static ONE_DIRECTION_DISTANCE:usize=8;
 pub static INFINITE:usize=10000;
-static WORLD_SIZE:usize=500;
-static INPUT_DIR_SIZE:usize=18;
-static GENERATION_LIMIT:usize=180;
+static WORLD_SIZE:usize=1000;
+static INPUT_DIR_SIZE:usize=24;
+static GENERATION_LIMIT:usize=300;
 static POPULATION_NUMBER:usize=8;
 
 
@@ -68,6 +72,8 @@ lazy_static! {
     //Content we need to put in the crate/bin/bank
     static ref CONTENT:Mutex<PutContent>=Mutex::new(PutContent::default());
 
+    static ref ALREADY_VISITED:Mutex<Vec<Vec<bool>>>=Mutex::new(Vec::new());
+
 }
 
 
@@ -87,7 +93,6 @@ impl Default for PutContent{
 struct MyRobot{
     robot:Robot,
     interest_points:HashMap<(usize,usize),Content>,
-    visited:Vec<Vec<bool>>,
 }
 
 
@@ -108,8 +113,17 @@ impl Runnable for MyRobot {
 
             if follow_dir.is_done(){
                 follow_dir.path_to_follow.clear();
+                follow_dir.cost=0;
+
+                *WAIT_FOR_ENERGY.lock().unwrap()=false;
             }else{
+                let d=self.get_coordinate();
+
+                // This cost is used calculate if our robot has enough energy to process all the actions
+                follow_dir.cost=calculate_cost_dir(&follow_dir,d.get_row(),d.get_col(),&robot_map(world).unwrap());
+
                 println!("We left because is not done yet");
+                *WAIT_FOR_ENERGY.lock().unwrap()=true;
                 return;
             }
         }
@@ -126,20 +140,22 @@ impl Runnable for MyRobot {
         //Implement functions for go in the bank/crate/bin:
         //check backpack:
         if self.backpack_contains_something(){
-            let (content,size)=self.get_content_backpack();
+            let (content, mut size)=self.get_content_backpack();
             println!("Content to search:{:?} and size:{}",content,size);
 
             let search=self.search_respective_content(&content);
 
             if search!=None && self.container_exists(&search){
+
                 println!("Size backpack:{}",self.get_backpack().get_size());
                 for i in self.get_backpack().get_contents().iter(){
                     if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0) || i.0.to_default()==Garbage(0) || i.0.to_default()==Tree(0){
-                        println!("Size of {}:{}",i.0.to_default(),i.1);
+                        println!("Backpack of {}:{}",i.0.to_default(),i.1);
                     }
                 }
 
-                let (dest_x,dest_y)=self.search_content(search,d.get_row(),d.get_col());
+
+                let (dest_x,dest_y)=self.search_content(search,d.get_row(),d.get_col(),&mut size);
 
                 let mut charted_path = ChartingTools::tool::<ChartedPaths>().unwrap();
                 charted_path.init(&robot_map(world).unwrap(), world);
@@ -149,9 +165,15 @@ impl Runnable for MyRobot {
 
                 let path=charted_path.shortest_path(ch1,ch2);
 
+
                 *CONTENT.lock().unwrap()=PutContent{
                     content,quantity:size,
                 };
+                println!("------------------------------------------");
+                println!("Destination:({},{})",dest_x,dest_y);
+                for i in &self.interest_points{
+                    println!("At this coordinate:({},{}) there is {:?}",i.0.0,i.0.1,i.1);
+                }
 
                 if path.is_some(){
 
@@ -171,12 +193,12 @@ impl Runnable for MyRobot {
                     };
                     result_path.push(dir);
 
-                    ///ERROR IN THE EXECUTION OF THE PATH
-                    println!("Charted path found");
+                    println!("Charted path found with cost:{}",path.0);
+                    /*
                     for i in result_path.iter(){
                         println!("{:?}",i);
                     }
-                    println!("Costo:{}",path.0);//Problema se il costo supera i 1000.
+                     */
                     FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=result_path;
                     *WAIT_FOR_ENERGY.lock().unwrap()=true;
                     return;
@@ -211,11 +233,6 @@ impl Runnable for MyRobot {
 
         //println!("\nMy coordinates:{:?}",self.get_coordinate());
 
-        /*
-        let wh=put(self,world,Garbage(0),5,Direction::Right);
-        println!("wh:{:?}",wh);
-        */
-
     }
 
     fn handle_event(&mut self, event: Event) { /*println!("{:?}", event); */}
@@ -247,7 +264,7 @@ impl Runnable for MyRobot {
 
 impl MyRobot{
     fn new()->Self{
-        let mut vet=Vec::new();
+        let mut vet=ALREADY_VISITED.lock().unwrap();
         for _ in 0..WORLD_SIZE{
             let mut v=Vec::new();
             for _ in 0..WORLD_SIZE{
@@ -258,38 +275,31 @@ impl MyRobot{
         Self{
             robot: Robot::new(),
             interest_points: HashMap::new(),
-            visited:vet,
         }
     }
 
     fn move_based_on_threads(&mut self,world:&mut World,path:&mut Vec<InputDir>){
 
+        let cont=CONTENT.lock().unwrap().content.clone();
+        let quantity=CONTENT.lock().unwrap().quantity.clone();
+
         for i in path.iter_mut(){
             if *i==InputDir::None{continue}
 
             match *i{
-                InputDir::Right(a,_) => {self.destroy_if_true(world,a,i)},
-                InputDir::Left(a,_) => {self.destroy_if_true(world,a,i);}
-                InputDir::Top(a,_) => {self.destroy_if_true(world,a,i);}
-                InputDir::Bottom(a,_) => {self.destroy_if_true(world,a,i);}
-                InputDir::None => {}
-            }
-
-            //println!("Move to do:{:?}",i);
-
-            let cont=CONTENT.lock().unwrap().content.clone();
-            let quantity=CONTENT.lock().unwrap().quantity.clone();
-
-            match *i{
-                InputDir::Right(_,true) => {let d=put(self, world, cont, quantity, Direction::Right);println!("{:?}",d);},
-                InputDir::Left(_,true) => {let d=put(self, world,  cont, quantity, Direction::Left);println!("{:?}",d);}
-                InputDir::Top(_,true) => {let d=put(self, world, cont, quantity, Direction::Up);println!("{:?}",d);}
-                InputDir::Bottom(_,true) => {let d=put(self, world, cont, quantity, Direction::Down);println!("{:?}",d);}
+                InputDir::Right(true,_) => {let _=destroy(self,world,i.property());},
+                InputDir::Left(true,_) => {let _=destroy(self,world,i.property());}
+                InputDir::Top(true,_) => {let _=destroy(self,world,i.property());}
+                InputDir::Bottom(true,_) => {let _=destroy(self,world,i.property());}
+                InputDir::Right(_,true) => {let d=put(self, world, cont.clone(), quantity, Direction::Right);println!("{:?}",d);self.save_contents(world);},
+                InputDir::Left(_,true) => {let d=put(self, world,  cont.clone(), quantity, Direction::Left);println!("{:?}",d);self.save_contents(world);}
+                InputDir::Top(_,true) => {let d=put(self, world, cont.clone(), quantity, Direction::Up);println!("{:?}",d);self.save_contents(world);}
+                InputDir::Bottom(_,true) => {let d=put(self, world, cont.clone(), quantity, Direction::Down);println!("{:?}",d);self.save_contents(world);}
                 _ => {
                     let d=go(self,world,i.property());
                     match d{
                         Ok(_) => {}
-                        Err(e) => {println!("Error move:{:?}",e)}
+                        Err(e) => {println!("Error move:{:?}",e); if e==NotEnoughEnergy{return;} /*If error we return and we wait when we will have more energy*/}
                     }
                 }
             }
@@ -300,7 +310,29 @@ impl MyRobot{
         //We set the coordinate we arrived as true, so we won't go here again.
         let x=self.get_coordinate().get_row();
         let y=self.get_coordinate().get_col();
-        self.visited[x][y]=true;
+
+
+        //We set the area we have arrived as visited.
+        let vet:Vec<(i32,i32)>=vec![(-1,0),(0,0),(1,0),(0,1),(0,-1),(-1,-1),(-1,1),(1,1),(1,-1)];
+
+        for (i,j) in vet{
+            let mut x1=x as i32+i;
+            if x1<0{
+                x1=0;
+            }else if x1>WORLD_SIZE as i32{
+                x1=WORLD_SIZE as i32;
+            }
+
+
+            let mut y1=y as i32+j;
+            if y1<0{
+                y1=0;
+            }else if y1>= WORLD_SIZE as i32 {
+                y1=WORLD_SIZE as i32;
+            }
+
+            ALREADY_VISITED.lock().unwrap()[x1 as usize][y1 as usize]=true;
+        }
 
     }
 
@@ -341,22 +373,25 @@ impl MyRobot{
                 let content=&map[i as usize][j as usize].as_ref().unwrap().content;
 
                 if content.to_default()==None || content.to_default()==Fire || content.to_default()==Tree(0) || content.to_default()==Bush(0) || content.to_default()==Fish(0) || content.to_default()==Rock(0) || content.to_default()==Coin(0) || content.to_default()==Garbage(0) || content.to_default()==Market(0){continue}
+
                 else{
                     if match content{
-                        Bin(a) => {if a.start==a.end{false}else{true}}
-                        Crate(a) => {if a.start==a.end{false}else{true}}
-                        Bank(a) => {if a.start==a.end{false}else{true}}
+                        Bin(a) => {if a.end-a.start==0{false}else{true}}
+                        Crate(a) => {if a.end-a.start==0{false}else{true}}
+                        Bank(a) => {if a.end-a.start==0{false}else{true}}
                         _ => {true}
                     }{
+
                         self.interest_points.insert((i as usize,j as usize), content.clone());
+
+                    }else{
+
+                        self.interest_points.remove(&(i as usize,j as usize));
+
                     }
 
                 }
             }
-        }
-
-        for i in &self.interest_points{
-            println!("At this coordinate:({},{}) there is {:?}",i.0.0,i.0.1,i.1);
         }
 
     }
@@ -393,11 +428,11 @@ impl MyRobot{
         let res_vet =PositionToGo::new_with_world(&rob_map, x, y);
 
 
-
         let _=Spotlight::illuminate(self,world,DISTANCE);
-        //let _=Spotlight::illuminate( &Spotlight::default(),self, world, DISTANCE);
+
 
         let mut result=Vec::new();
+
 
         //We discover new tiles around us
         for i in res_vet.iter().enumerate(){
@@ -413,32 +448,115 @@ impl MyRobot{
         //We take the new robot map with the updated robot map
         let rob_map=robot_map(world).unwrap();
 
+
+        // We try an iteration without selecting the one with shallowWater. (my politics)
+
         //We create define the vector with the position we have to go
         for i in res_vet.iter().enumerate(){
             //We set the first condition because we don't know if it can go out of bounds
             //We second conditions is set because we don't want to set a point to go which is "Lava", "DeepWater" or Tile=None.
             match i.1{
-                PositionToGo::Right => {if !is_not_visualize(x as i32, y as i32+ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y+ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::DownRight => {if !is_not_visualize(x as i32+DISTANCE as i32, y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Down => {if !is_not_visualize(x as i32+ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x+ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
-                PositionToGo::TopRight => {if !is_not_visualize(x as i32-DISTANCE as i32,y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y+DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Left => {if !is_not_visualize(x as i32, y as i32-ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y-ONE_DIRECTION_DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::TopLeft => {if !is_not_visualize(x as i32-DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y-DISTANCE]){result.push(i.1.clone());}},
-                PositionToGo::Top => {if !is_not_visualize(x as i32-ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x-ONE_DIRECTION_DISTANCE][y]){result.push(i.1.clone());}},
-                PositionToGo::DownLeft => {if !is_not_visualize(x as i32+DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y-DISTANCE]){result.push(i.1.clone());}}
+                PositionToGo::Right => {
+                    if !is_not_visualize(x as i32, y as i32+ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y+ONE_DIRECTION_DISTANCE]) && rob_map[x][y+ONE_DIRECTION_DISTANCE].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                },
+                PositionToGo::DownRight => {
+                    if !is_not_visualize(x as i32+DISTANCE as i32, y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y+DISTANCE]) && rob_map[x+DISTANCE][y+DISTANCE].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                },
+                PositionToGo::Down => {
+                    if !is_not_visualize(x as i32+ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x+ONE_DIRECTION_DISTANCE][y]) && rob_map[x+ONE_DIRECTION_DISTANCE][y].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                },
+                PositionToGo::TopRight => {
+                    if !is_not_visualize(x as i32-DISTANCE as i32,y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y+DISTANCE]) && rob_map[x-DISTANCE][y+DISTANCE].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                },
+                PositionToGo::Left => {
+                    if !is_not_visualize(x as i32, y as i32-ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y-ONE_DIRECTION_DISTANCE]) && rob_map[x][y-ONE_DIRECTION_DISTANCE].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                },
+                PositionToGo::TopLeft => {
+                    if !is_not_visualize(x as i32-DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y-DISTANCE]) && rob_map[x-DISTANCE][y-DISTANCE].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                },
+                PositionToGo::Top => {
+                    if !is_not_visualize(x as i32-ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x-ONE_DIRECTION_DISTANCE][y]) && rob_map[x-ONE_DIRECTION_DISTANCE][y].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                },
+                PositionToGo::DownLeft => {
+                    if !is_not_visualize(x as i32+DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y-DISTANCE]) && rob_map[x+DISTANCE][y-DISTANCE].as_ref().unwrap().tile_type!=ShallowWater{
+                        result.push(i.1.clone());
+                    }
+                }
             }
         }
 
-        /*
-        for i in result.iter(){
-            println!("Position to go:{:?}",i);
+
+
+        //If the result.len()==0 then we also include the places with shallow water:
+
+        if result.len()==0{
+            for i in res_vet.iter().enumerate(){
+
+                match i.1{
+                    PositionToGo::Right => {
+                        if !is_not_visualize(x as i32, y as i32+ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y+ONE_DIRECTION_DISTANCE]){
+                            result.push(i.1.clone());
+                        }
+                    },
+                    PositionToGo::DownRight => {
+                        if !is_not_visualize(x as i32+DISTANCE as i32, y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y+DISTANCE]){
+                            result.push(i.1.clone());
+                        }
+                    },
+                    PositionToGo::Down => {
+                        if !is_not_visualize(x as i32+ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x+ONE_DIRECTION_DISTANCE][y]){
+                            result.push(i.1.clone());
+                        }
+                    },
+                    PositionToGo::TopRight => {
+                        if !is_not_visualize(x as i32-DISTANCE as i32,y as i32+DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y+DISTANCE]){
+                            result.push(i.1.clone());
+                        }
+                    },
+                    PositionToGo::Left => {
+                        if !is_not_visualize(x as i32, y as i32-ONE_DIRECTION_DISTANCE as i32) && is_good_tile(&rob_map[x][y-ONE_DIRECTION_DISTANCE]){
+                            result.push(i.1.clone());
+                        }
+                    },
+                    PositionToGo::TopLeft => {
+                        if !is_not_visualize(x as i32-DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x-DISTANCE][y-DISTANCE]){
+                            result.push(i.1.clone());
+                        }
+                    },
+                    PositionToGo::Top => {
+                        if !is_not_visualize(x as i32-ONE_DIRECTION_DISTANCE as i32, y as i32) && is_good_tile(&rob_map[x-ONE_DIRECTION_DISTANCE][y]){
+                            result.push(i.1.clone());
+                        }
+                    },
+                    PositionToGo::DownLeft => {
+                        if !is_not_visualize(x as i32+DISTANCE as i32, y as i32-DISTANCE as i32) && is_good_tile(&rob_map[x+DISTANCE][y-DISTANCE]){
+                            result.push(i.1.clone());
+                        }
+                    }
+                }
+            }
         }
-         */
+
+
 
         // We prevent some possible problem. Since, it might get stuck in the threads to search for
-        // the best path.
-        if result.len()<=2{
-            result=PositionToGo::new_already_seen(self,&rob_map,x,y);
+        // the best path. So we travel in places which we have already visited before.
+        if result.len()==0{
+            result=PositionToGo::new_already_seen(&rob_map,x,y);
         }
 
         *POSITIONS_TO_GO.lock().unwrap()=result.clone();
@@ -446,25 +564,20 @@ impl MyRobot{
         return Ok(());
     }
 
-    fn already_visited(&self,x:i32,y:i32)->bool{
-        if self.visited[x as usize][y as usize]{
-            true
-        }else{
-            false
-        }
-    }
-
     fn enough_energy_to_operate(&mut self, moves:&MovesToFollow,world:&World)->bool{
-
-        let mut cost=moves.cost;
 
         let d=self.get_coordinate();
         let mut x=d.get_row();
         let mut y=d.get_col();
 
+
         if robot_map(world).is_none(){return false;}//return Err(OperationNotAllowed);}
 
         let rob_map=robot_map(world).unwrap();
+
+        //We calculate the cost of the follor_dir variable path. (It's the path we created with the threads)
+        let mut cost=moves.cost;
+
 
         //I initialize the vector also used by the threads, which they will find the best path to it
         let res_vet=PositionToGo::new_with_world(&rob_map,x,y);
@@ -511,8 +624,9 @@ impl MyRobot{
 
         cost+=cost_energy;
 
-        if self.get_energy().get_energy_level()>500 && cost>1000{
-            false
+        if self.get_energy().get_energy_level()>800 && cost>1000{
+            println!("Entered because cost energy>1000");
+            true
         }else{
             self.get_energy().has_enough_energy(cost)
         }
@@ -575,7 +689,7 @@ impl MyRobot{
         (cont,max_so_far)
     }
 
-    fn search_content(&self,content:Content,x:usize,y:usize)->(usize,usize){
+    fn search_content(&self,content:Content,x:usize,y:usize,size:&mut usize)->(usize,usize){
 
         let mut res_x=INFINITE;
         let mut res_y=INFINITE;
@@ -583,11 +697,20 @@ impl MyRobot{
         for i in self.interest_points.iter(){
             if i.1.to_default()==content{
                 if (x.abs_diff(i.0.0)+(y.abs_diff(i.0.1)))<(x.abs_diff(res_x)+y.abs_diff(res_y)){
+
+                    //We are making this condition because:
+                    //If the garbage size of the backpack is bigger than 5, it won't fit all in the bin
+                    //So we put at max 5 garbage in the bin
+                    if i.1.get_value().1.unwrap().end-i.1.get_value().1.unwrap().start<*size{
+                        *size=i.1.get_value().1.unwrap().end-i.1.get_value().1.unwrap().start;
+                    }
+
                     res_x=i.0.0;
                     res_y=i.0.1;
                 }
             }
         }
+        println!("Size at the end:{}",size);
 
         (res_x,res_y)
     }
@@ -649,7 +772,7 @@ impl MovesToFollow{
 
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,PartialEq)]
 enum PositionToGo{
     Down,
     DownRight,
@@ -709,7 +832,7 @@ impl PositionToGo{
         }
     }
 
-    fn new_already_seen(robot:&MyRobot,rob_map:&Vec<Vec<Option<Tile>>>,x:usize,y:usize)->Vec<PositionToGo>{
+    fn new_already_seen(rob_map:&Vec<Vec<Option<Tile>>>,x:usize,y:usize)->Vec<PositionToGo>{
         let iter_me=[PositionToGo::Down, PositionToGo::DownRight,
             PositionToGo::Right, PositionToGo::TopRight, PositionToGo::Top,
             PositionToGo::TopLeft, PositionToGo::Left, PositionToGo::DownLeft];
@@ -728,7 +851,7 @@ impl PositionToGo{
 
             if is_not_visualize(destination_x, destination_y){ continue }
 
-            if is_good_tile(&rob_map[destination_x as usize][destination_y as usize]) && !robot.already_visited(destination_x,destination_y){
+            if is_good_tile(&rob_map[destination_x as usize][destination_y as usize]) && !already_visited(destination_x,destination_y){
                 v.push(position);
             }
         }
@@ -775,7 +898,7 @@ fn main() {
     let mut run = Runner::new(Box::new(r), &mut g).unwrap();
 
 
-    for _ in 0..100{
+    for _ in 0..200{
         loop {
             let _ = run.game_tick();
             if !*WAIT_FOR_ENERGY.lock().unwrap(){
@@ -815,8 +938,11 @@ fn main() {
 
                 for i in positions{
 
+                    let pos=i.clone();
+
                     //I launch a thread for every specific direction which we may follow
                     let thread_map=Arc::clone(&map);
+
 
                     //Move converts any variables captured by reference or mutable reference to variables captured by value
                     let handle=spawn( move ||{
@@ -825,6 +951,7 @@ fn main() {
 
                         //Get position of where our thread's destination is.
                         let (destination_x,destination_y)=get_next_position(i);
+
 
                         let mut genetic_set=Vec::new();
 
@@ -836,8 +963,17 @@ fn main() {
 
                         let mut f=true;
 
-                        let dest_x=(x as i32+destination_x) as usize;
-                        let dest_y=(y as i32+destination_y) as usize;
+                        let mut dest_x= 0;
+
+                        if (x as i32 +destination_x)>=0{
+                            dest_x= (x as i32+destination_x) as usize;
+                        }
+
+                        let mut dest_y=0;
+
+                        if (y as i32+destination_y) as usize>=0{
+                            dest_y=(y as i32+destination_y) as usize
+                        }
 
                         //We repeat the Selection, Crossover and mutation:
                         for _ in 0..GENERATION_LIMIT{
@@ -865,12 +1001,15 @@ fn main() {
                             //We also push the two winning parents with their children
                             genetic_set.push(first);
                             genetic_set.push(second);
+
                         }
+
 
                         //We generate the last generation:
                         for i in genetic_set.iter_mut(){
                             i.genetic_cost(&inside_thread_map,(dest_x,dest_y));
                         }
+
 
                         //we take the fastest sample:
                         let mut index_res=0;
@@ -898,8 +1037,14 @@ fn main() {
 
                 //println!("\n\nAt the calculation I got:");
                 for i in handlers{
-                    let value=i.join().unwrap();
+                    let value=i.join();
 
+                    match value{
+                        Ok(_) => {}
+                        Err(e) => {println!("Error in the thread:{:?}",e);continue}
+                    }
+
+                    let value=value.unwrap();
                     if value==Option::None{continue}
 
                     let value=value.unwrap();
@@ -928,13 +1073,12 @@ fn main() {
                         thread_flag=false;
                     }
                 }else if counter_try>10 && counter_try<=15{
-                    let pos=PositionToGo::new_already_seen_without_rob(&map,x,y);
+                    let pos=PositionToGo::new_already_seen(&map,x,y);
                     *POSITIONS_TO_GO.lock().unwrap()=pos.clone();
-                    for i in pos{
-                        println!("Position:{:?}",i);
-                    }
+
                     println!("I got weight:{},distance:{}, cost:{}",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost);
                     println!("\n");
+
                     if min_so_far.distanze_from_dest<=4{
                         thread_flag=false;
                     }
@@ -954,7 +1098,7 @@ fn main() {
         //That's an ideal time for the threads to finish their work. It also helps me to keep a balanced energy level for the robot.
         for _ in 0..20{
             let _=run.game_tick();
-            sleep(Duration::from_millis(20));
+            sleep(Duration::from_millis(10));
         }
 
         //We wait for the thread, which contains all the other threads, to finish
