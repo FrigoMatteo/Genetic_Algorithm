@@ -24,7 +24,6 @@ use rust_eze_spotlight::Spotlight;
 use ghost_amazeing_island::world_generator::*;
 use charting_tools::ChartingTools;
 use charting_tools::charted_coordinate::ChartedCoordinate;
-use charting_tools::charted_map::MapKey;
 use charting_tools::charted_paths::ChartedPaths;
 
 use genetic_algorithm::{InputDir,GeneticSearch,genetic_selection,genetic_mutation,genetic_crossover};
@@ -38,7 +37,7 @@ use crate::helpers_functions::{already_visited, calculate_cost_dir};
 pub static DISTANCE:usize=4;
 pub static ONE_DIRECTION_DISTANCE:usize=8;
 pub static INFINITE:usize=10000;
-static WORLD_SIZE:usize=1000;
+static WORLD_SIZE:usize=500;
 static INPUT_DIR_SIZE:usize=24;
 static GENERATION_LIMIT:usize=300;
 static POPULATION_NUMBER:usize=8;
@@ -76,11 +75,13 @@ lazy_static! {
 
 }
 
-
+// Struct used when we have to insert a content inside a container
 struct PutContent{
     content:Content,
     quantity:usize,
 }
+
+
 impl Default for PutContent{
     fn default() -> Self {
         Self{
@@ -89,6 +90,7 @@ impl Default for PutContent{
         }
     }
 }
+
 
 struct MyRobot{
     robot:Robot,
@@ -106,6 +108,7 @@ impl Runnable for MyRobot {
 
 
         let mut follow_dir=FOLLOW_DIRECTIONS.lock().unwrap();
+
         //We follow the path created by the threads (we basically move)
         if !follow_dir.path_to_follow.is_empty(){
             //Actuator
@@ -122,13 +125,15 @@ impl Runnable for MyRobot {
                 // This cost is used calculate if our robot has enough energy to process all the actions
                 follow_dir.cost=calculate_cost_dir(&follow_dir,d.get_row(),d.get_col(),&robot_map(world).unwrap());
 
-                println!("We left because is not done yet");
                 *WAIT_FOR_ENERGY.lock().unwrap()=true;
                 return;
             }
         }
 
         drop(follow_dir);
+
+
+
 
         // I update my position
         let d=self.get_coordinate();
@@ -137,16 +142,21 @@ impl Runnable for MyRobot {
         POSITION.lock().unwrap().1=d.get_col();
 
 
-        //Implement functions for go in the bank/crate/bin:
+
+
+        //Implement functions to go close to the bank/crate/bin:
         //check backpack:
         if self.backpack_contains_something(){
             let (content, mut size)=self.get_content_backpack();
+
+            //Content to search
             println!("Content to search:{:?} and size:{}",content,size);
 
             let search=self.search_respective_content(&content);
 
             if search!=None && self.container_exists(&search){
 
+                //We print our backpack contents
                 println!("Size backpack:{}",self.get_backpack().get_size());
                 for i in self.get_backpack().get_contents().iter(){
                     if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0) || i.0.to_default()==Garbage(0) || i.0.to_default()==Tree(0){
@@ -171,6 +181,8 @@ impl Runnable for MyRobot {
                 };
                 println!("------------------------------------------");
                 println!("Destination:({},{})",dest_x,dest_y);
+                //We print all our "interesting point".
+                // They, basically, are the containers where we have to put all the objects
                 for i in &self.interest_points{
                     println!("At this coordinate:({},{}) there is {:?}",i.0.0,i.0.1,i.1);
                 }
@@ -194,11 +206,7 @@ impl Runnable for MyRobot {
                     result_path.push(dir);
 
                     println!("Charted path found with cost:{}",path.0);
-                    /*
-                    for i in result_path.iter(){
-                        println!("{:?}",i);
-                    }
-                     */
+
                     FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=result_path;
                     *WAIT_FOR_ENERGY.lock().unwrap()=true;
                     return;
@@ -212,16 +220,21 @@ impl Runnable for MyRobot {
 
 
         //I visualize the new area I have just moved in
-        //println!("After walking Energy:{:?}",self.get_energy());
+
         let res_visualize=self.visualize_around(world);
         match res_visualize{
             Ok(_)=>{},
-            Err(e)=>{if e==NotEnoughEnergy{*WAIT_FOR_ENERGY.lock().unwrap()=true;}
-                // TODO do something for the operation not allowed and content not provided
+            Err(e)=>{
+
+                if e==NotEnoughEnergy{
+
+                *WAIT_FOR_ENERGY.lock().unwrap()=true;
+
+                }
+
                 println!("Operation not allowed:{:?}",e);return;
             },
         }
-        //println!("After walking and visualizing Energy:{:?}",self.get_energy());
 
 
         //Function for the map image:
@@ -231,7 +244,6 @@ impl Runnable for MyRobot {
         self.update_static_data(world);
         self.save_contents(world);
 
-        //println!("\nMy coordinates:{:?}",self.get_coordinate());
 
     }
 
@@ -313,33 +325,26 @@ impl MyRobot{
 
 
         //We set the area we have arrived as visited.
-        let vet:Vec<(i32,i32)>=vec![(-1,0),(0,0),(1,0),(0,1),(0,-1),(-1,-1),(-1,1),(1,1),(1,-1)];
-
-        for (i,j) in vet{
+        for i in -2..=2{
             let mut x1=x as i32+i;
+
             if x1<0{
                 x1=0;
             }else if x1>WORLD_SIZE as i32{
                 x1=WORLD_SIZE as i32;
             }
 
-
-            let mut y1=y as i32+j;
-            if y1<0{
-                y1=0;
-            }else if y1>= WORLD_SIZE as i32 {
-                y1=WORLD_SIZE as i32;
+            for j in -2..=2{
+                let mut y1=y as i32+j;
+                if y1<0{
+                    y1=0;
+                }else if y1>= WORLD_SIZE as i32 {
+                    y1=WORLD_SIZE as i32;
+                }
+                ALREADY_VISITED.lock().unwrap()[x1 as usize][y1 as usize]=true;
             }
-
-            ALREADY_VISITED.lock().unwrap()[x1 as usize][y1 as usize]=true;
         }
 
-    }
-
-    fn destroy_if_true(&mut self,world:&mut World, t:bool,data:&InputDir){
-        if t{
-            let _=destroy(self,world,data.property());
-        }
     }
 
     fn get_from_to(&self,distance:usize,len:i32)->Vec<(i32,i32)>{
@@ -681,7 +686,7 @@ impl MyRobot{
         for i in self.get_backpack().get_contents().iter(){
             if i.0.to_default()==Garbage(0) && *i.1>=5{
                 return (i.0.clone(),*i.1);
-            }else if (i.0.to_default()==Garbage(0).to_default()|| i.0.to_default()==Coin(0)) && *i.1>max_so_far{
+            }else if (i.0.to_default()==Garbage(0).to_default()|| i.0.to_default()==Coin(0) || i.0.to_default()==Tree(0)) && *i.1>max_so_far{
                 max_so_far=*i.1;
                 cont=i.0.clone();
             }
@@ -710,7 +715,6 @@ impl MyRobot{
                 }
             }
         }
-        println!("Size at the end:{}",size);
 
         (res_x,res_y)
     }
@@ -726,6 +730,7 @@ impl MyRobot{
 
     fn search_respective_content(&self,content:&Content)->Content{
         match content {
+            Tree(_)=>{Crate(0..0)}
             Garbage(_) => {Bin(0..0)}
             Coin(_) => {Bank(0..0)}
             _=>{None}
@@ -840,20 +845,50 @@ impl PositionToGo{
 
         let mut v=Vec::new();
 
-        for i in iter_me{
+        for i in &iter_me{
             let position=i.clone();
 
-            let (ds_x,ds_y)=get_next_position(i);
+            let (ds_x,ds_y)=get_next_position(i.clone());
 
             let destination_x=(x as i32)+ds_x;
             let destination_y=(y as i32)+ds_y;
 
 
-            if is_not_visualize(destination_x, destination_y){ continue }
+            if is_not_visualize(destination_x, destination_y)
+                || (
+                rob_map[destination_x as usize][destination_y as usize].is_some()
+                && rob_map[destination_x as usize][destination_y as usize].as_ref().unwrap().tile_type==ShallowWater
+            ){ continue }
 
             if is_good_tile(&rob_map[destination_x as usize][destination_y as usize]) && !already_visited(destination_x,destination_y){
                 v.push(position);
             }
+        }
+
+        //Already visited, also thinking about the points where we have already gone there.
+        // In fact, we have the function "already_visited", which checks if we have already set the destination there.
+        if v.is_empty(){
+            for i in &iter_me{
+                let position=i.clone();
+
+                let (ds_x,ds_y)=get_next_position(i.clone());
+
+                let destination_x=(x as i32)+ds_x;
+                let destination_y=(y as i32)+ds_y;
+
+
+                if is_not_visualize(destination_x, destination_y) { continue }
+
+                if is_good_tile(&rob_map[destination_x as usize][destination_y as usize]) && !already_visited(destination_x,destination_y){
+                    v.push(position);
+                }
+            }
+        }
+
+        //If still empty, we basically create a vector PositionToGo without thinking
+        // about the "already_visited" or the shallow water.
+        if v.is_empty(){
+            v.append(&mut PositionToGo::new_already_seen_without_rob(&rob_map, x, y));
         }
 
         v
@@ -898,7 +933,7 @@ fn main() {
     let mut run = Runner::new(Box::new(r), &mut g).unwrap();
 
 
-    for _ in 0..200{
+    loop{
         loop {
             let _ = run.game_tick();
             if !*WAIT_FOR_ENERGY.lock().unwrap(){
@@ -938,8 +973,6 @@ fn main() {
 
                 for i in positions{
 
-                    let pos=i.clone();
-
                     //I launch a thread for every specific direction which we may follow
                     let thread_map=Arc::clone(&map);
 
@@ -965,13 +998,13 @@ fn main() {
 
                         let mut dest_x= 0;
 
-                        if (x as i32 +destination_x)>=0{
+                        if x as i32 +destination_x>=0{
                             dest_x= (x as i32+destination_x) as usize;
                         }
 
                         let mut dest_y=0;
 
-                        if (y as i32+destination_y) as usize>=0{
+                        if y as i32+destination_y>=0{
                             dest_y=(y as i32+destination_y) as usize
                         }
 
@@ -1021,7 +1054,6 @@ fn main() {
                             }
                         }
                         /*
-                        println!("\nI am going to pass:");
                         println!("I got weight:{},distance:{}, cost:{} and this series:{:?}",genetic_set[index_res].weight,genetic_set[index_res].distanze_from_dest,genetic_set[index_res].cost,genetic_set[index_res].vector);
                          */
 
@@ -1035,7 +1067,7 @@ fn main() {
                     handlers.push(handle);
                 }
 
-                //println!("\n\nAt the calculation I got:");
+
                 for i in handlers{
                     let value=i.join();
 
@@ -1069,10 +1101,13 @@ fn main() {
                 if min_so_far.distanze_from_dest<=1{
                     thread_flag=false;
                 }else if counter_try>=3 && counter_try<=10{
+
                     if min_so_far.distanze_from_dest<=2{
                         thread_flag=false;
                     }
+
                 }else if counter_try>10 && counter_try<=15{
+
                     let pos=PositionToGo::new_already_seen(&map,x,y);
                     *POSITIONS_TO_GO.lock().unwrap()=pos.clone();
 

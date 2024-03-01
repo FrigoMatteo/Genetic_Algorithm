@@ -142,6 +142,9 @@ impl InputDir{
     }
 }
 
+
+// This is our element used in the genetic algorithm.
+// So, from it, we will create all our "robot path" used in the generations.
 #[derive(Clone,PartialEq)]
 pub struct GeneticSearch{
     pub(crate) vector:Vec<InputDir>,
@@ -206,14 +209,15 @@ impl GeneticSearch{
             let mut x_s=x+x_dem;
             let mut y_s=y+y_dem;
 
-            if is_not_visualize(x_s,y_s) || inside_thread_map[x_s as usize][y_s as usize].is_none(){self.vector.push(InputDir::None);continue;}
-
             if x_s<0{
                 x_s=0;
             }
             if y_s<0 {
                 y_s=0;
             }
+
+            if is_not_visualize(x_s,y_s) || inside_thread_map[x_s as usize][y_s as usize].is_none(){self.vector.push(InputDir::None);continue;}
+
 
             while !is_good_tile(&inside_thread_map[x_s as usize][y_s as usize]){
                 x_s=x;
@@ -238,6 +242,7 @@ impl GeneticSearch{
         }
 
     }
+
 
     pub(crate) fn genetic_cost(&mut self, inside_thread_map:&Arc<Vec<Vec<Option<Tile>>>>, destination:(usize, usize)){
         let mut x=self.start_x;
@@ -417,6 +422,8 @@ impl GeneticSearch{
     }
 
 }
+
+
 pub fn genetic_selection(population:&mut Vec<GeneticSearch>)->(GeneticSearch,GeneticSearch){
     population.sort_by(|a,b| {
         let d=a.distanze_from_dest.cmp(&b.distanze_from_dest);
@@ -485,6 +492,7 @@ pub fn genetic_crossover(population:&mut Vec<GeneticSearch>,first:&GeneticSearch
     population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[0],second_part[0],third_part[1]].concat()));
     population.push(GeneticSearch::new_with_vector(*x as i32,*y as i32,[first_part[1],second_part[1],third_part[0]].concat()));
 }
+
 
 pub fn genetic_cost(current_coord: (usize, usize), target_coord: (usize, usize), map:&Arc<Vec<Vec<Option<Tile>>>>) -> usize {
     // Get tiles
