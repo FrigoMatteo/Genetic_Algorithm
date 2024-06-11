@@ -4,6 +4,7 @@ mod helpers_functions;
 
 
 use std::collections::HashMap;
+use std::mem;
 use std::sync::{Arc, Mutex};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
@@ -114,6 +115,7 @@ impl Runnable for MyRobot {
             //Actuator
             self.move_based_on_threads(world,&mut follow_dir.path_to_follow);
 
+            // If we haven't finished walking, but we finish all the energy, we wait a cycle to recharge and continue
             if follow_dir.is_done(){
                 follow_dir.path_to_follow.clear();
                 follow_dir.cost=0;
@@ -122,7 +124,7 @@ impl Runnable for MyRobot {
             }else{
                 let d=self.get_coordinate();
 
-                // This cost is used calculate if our robot has enough energy to process all the actions
+                // This cost is used to calculate if our robot has enough energy to process all the actions
                 follow_dir.cost=calculate_cost_dir(&follow_dir,d.get_row(),d.get_col(),&robot_map(world).unwrap());
 
                 *WAIT_FOR_ENERGY.lock().unwrap()=true;
@@ -147,6 +149,12 @@ impl Runnable for MyRobot {
         //Implement functions to go close to the bank/crate/bin:
         //check backpack:
         if self.backpack_contains_something(){
+            //We return the content and the size we need to leave in the specific container.
+            //This decision is based on a priority of which elements needs to get rid of.
+            // For example, if we have:
+            //          tree 15
+            //          rock 5
+            // We will try to get rid of the tree first, since it's the object which occupies most of the space.
             let (content, mut size)=self.get_content_backpack();
 
             //Content to search
@@ -157,6 +165,7 @@ impl Runnable for MyRobot {
             if search!=None && self.container_exists(&search){
 
                 //We print our backpack contents
+                println!("We print what we have in the backpack");
                 println!("Size backpack:{}",self.get_backpack().get_size());
                 for i in self.get_backpack().get_contents().iter(){
                     if i.0.to_default()==Rock(0).to_default() || i.0.to_default()==Coin(0) || i.0.to_default()==Garbage(0) || i.0.to_default()==Tree(0){
@@ -165,6 +174,7 @@ impl Runnable for MyRobot {
                 }
 
 
+                // We search for the closest specific container for the content we need to get rid of
                 let (dest_x,dest_y)=self.search_content(search,d.get_row(),d.get_col(),&mut size);
 
                 let mut charted_path = ChartingTools::tool::<ChartedPaths>().unwrap();
@@ -173,14 +183,17 @@ impl Runnable for MyRobot {
                 let ch1=ChartedCoordinate::from((d.get_row(),d.get_col()));
                 let ch2=ChartedCoordinate::from((dest_x,dest_y));
 
+
+                //We use the tool to search the best path to arrive at the container
                 let path=charted_path.shortest_path(ch1,ch2);
 
 
                 *CONTENT.lock().unwrap()=PutContent{
                     content,quantity:size,
                 };
-                println!("------------------------------------------");
+                println!("(-------------------------------------------------------------------------)");
                 println!("Destination:({},{})",dest_x,dest_y);
+                println!("We print all the positions of our containers");
                 //We print all our "interesting point".
                 // They, basically, are the containers where we have to put all the objects
                 for i in &self.interest_points{
@@ -205,7 +218,7 @@ impl Runnable for MyRobot {
                     };
                     result_path.push(dir);
 
-                    println!("Charted path found with cost:{}",path.0);
+                    println!("Charted path found with cost:{}\n\n\n",path.0);
 
                     FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=result_path;
                     *WAIT_FOR_ENERGY.lock().unwrap()=true;
@@ -964,6 +977,8 @@ fn main() {
 
                 let data=ROBOT_MAP.lock().unwrap();
                 let map=Arc::new(data.clone());
+
+                // Positions we can choose to go
                 let positions=POSITIONS_TO_GO.lock().unwrap().clone();
 
 
@@ -994,6 +1009,7 @@ fn main() {
                             genetic_set.push(n);
                         }
 
+                        // f is a test variable I used to check when it finds his first distanze=0 for a possible position to go
                         let mut f=true;
 
                         let mut dest_x= 0;
@@ -1022,16 +1038,17 @@ fn main() {
 
                             //Genetic Selection: we take an elite set and one based on probability.
                             //This way, also the children can learn.
-                            //let (first,second)=genetic_selection(&mut genetic_set);
+                            //We take the first and second based on the distance from destination and the weight.
                             let (first,second)=genetic_selection(&mut genetic_set);
 
-                            //Genetic crossover. Here we generate new sons from first and second
+                            //Genetic crossover. Here we generate new sons from first and second (two strongest set)
                             genetic_crossover(&mut genetic_set, &first, &second, &x, &y);
 
                             //Genetic mutation. Where are going to change a some value for escaping the local min problem.
                             genetic_mutation(&mut genetic_set);
 
                             //We also push the two winning parents with their children
+                            // The two strongest set won't have to mutate. If they need, they will do that the next cycle
                             genetic_set.push(first);
                             genetic_set.push(second);
 
@@ -1143,6 +1160,9 @@ fn main() {
         if t.weight>=1000{
             return;
         }
+
+        // Try to give time to read all data information
+        sleep(Duration::from_secs(2));
 
         *RECHARGE.lock().unwrap()=false;
         FOLLOW_DIRECTIONS.lock().unwrap().path_to_follow=t.vector;

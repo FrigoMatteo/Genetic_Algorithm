@@ -12,7 +12,7 @@ use crate::helpers_functions::{direction_value, is_good_tile, is_not_visualize};
 use crate::ENVIRONMENT;
 
 
-//I set two bools for the InputDir:
+//I set two bools for the InputDir, we use it for the thread paths:
 //The first if we need to destroy something.
 //The second if we need to put something. (I am lazy)
 #[derive(Debug, Clone, Copy, PartialEq)]
