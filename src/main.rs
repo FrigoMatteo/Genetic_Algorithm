@@ -593,6 +593,7 @@ impl MyRobot{
     }
 
     fn enough_energy_to_operate(&mut self, moves:&MovesToFollow,world:&World)->bool{
+        // We are going to calculate if we have enough energy to do all our operations
 
         let d=self.get_coordinate();
         let mut x=d.get_row();
@@ -653,6 +654,9 @@ impl MyRobot{
         cost+=cost_energy;
 
         if self.get_energy().get_energy_level()>800 && cost>1000{
+            // If the cost is over 1000 and we have at least 800 energy, we will do some operations until we have finished all our energy.
+            // but then, we will wait again here, so we can conclude everything we need to do.
+            //An example it's when we used the path finder and the position we need to reach it's really far from us.
             println!("Entered because cost energy>1000");
             true
         }else{
@@ -695,7 +699,8 @@ impl MyRobot{
         }else{
             *WAIT_FOR_ENERGY.lock().unwrap()=true;
         }
-        //check if we need more energy
+
+        //check if we need more energy, based on the condition of before
         if *WAIT_FOR_ENERGY.lock().unwrap(){
             return false;
         }
