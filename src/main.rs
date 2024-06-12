@@ -34,13 +34,21 @@ use lazy_static::lazy_static;
 use robotics_lib::world::tile::TileType::ShallowWater;
 use crate::helpers_functions::{already_visited, calculate_cost_dir};
 
-
+// Spotlight (tool) distance to look
 pub static DISTANCE:usize=4;
+
+// Distance to look with the "one_direction_view"
 pub static ONE_DIRECTION_DISTANCE:usize=8;
 pub static INFINITE:usize=10000;
 static WORLD_SIZE:usize=500;
+
+// "DNA" of the set of the genetic algorithm. Basically how many steps/actions my set can do
 static INPUT_DIR_SIZE:usize=24;
-static GENERATION_LIMIT:usize=300;
+
+// Generation limit for genetic algorithm
+static GENERATION_LIMIT:usize=150;
+
+//Genetic algorithm population number
 static POPULATION_NUMBER:usize=8;
 
 
@@ -64,6 +72,7 @@ lazy_static! {
 
     static ref POSITIONS_TO_GO:Mutex<Vec<PositionToGo>>=Mutex::new(PositionToGo::new());
 
+    // Which directions my threads will decide to go. (based on the number of them I will launch the specific number of threads)
     static ref FOLLOW_DIRECTIONS:Mutex<MovesToFollow>=Mutex::new(MovesToFollow::new());
 
     // If we need to charge our robot because we don't have enough energy to do our stuff.
@@ -72,6 +81,7 @@ lazy_static! {
     //Content we need to put in the crate/bin/bank
     static ref CONTENT:Mutex<PutContent>=Mutex::new(PutContent::default());
 
+    // I use it for my robot map to tell the robot which blocks I have already visited
     static ref ALREADY_VISITED:Mutex<Vec<Vec<bool>>>=Mutex::new(Vec::new());
 
 }
@@ -967,6 +977,8 @@ fn main() {
             //We control how many interations we do to search for the best path.
             let mut counter_try=0;
 
+            // The variable "thread_flag" it's used to continue to cycle the operations, if the result
+            // of our genetic algorithm gives us a path which hasn't reached the specific location (so distance=0)
             while thread_flag{
                 counter_try+=1;
                 min_so_far=GeneticSearch::default();
@@ -1026,7 +1038,7 @@ fn main() {
 
                         //We repeat the Selection, Crossover and mutation:
                         for _ in 0..GENERATION_LIMIT{
-                            //I fixed the generation limit to 100, which is optimal, since also the children learn from the parents.
+                            //I fixed the generation limit to 150, which is optimal, since also the children learn from the parents.
 
                             //Genetic Fitness, we calculate the weight of the random generated directions
                             for i in genetic_set.iter_mut(){
@@ -1114,10 +1126,9 @@ fn main() {
                 //We are going to leave the loop only if the result distance is at least lower than 1.
                 //If it doesn't work we will try again.
                 //We need to add some conditions, because it might get stucked if we are close to the deep water
-                //println!("Counter:{}",counter_try);
                 if min_so_far.distanze_from_dest<=1{
                     thread_flag=false;
-                }else if counter_try>=3 && counter_try<=10{
+                }else if counter_try>=5 && counter_try<=10{
 
                     if min_so_far.distanze_from_dest<=2{
                         thread_flag=false;
@@ -1128,13 +1139,11 @@ fn main() {
                     let pos=PositionToGo::new_already_seen(&map,x,y);
                     *POSITIONS_TO_GO.lock().unwrap()=pos.clone();
 
-                    println!("I got weight:{},distance:{}, cost:{}",min_so_far.weight,min_so_far.distanze_from_dest,min_so_far.cost);
-                    println!("\n");
-
                     if min_so_far.distanze_from_dest<=4{
                         thread_flag=false;
                     }
                 }else if counter_try>15{
+                    // We couldn't find a path to follow
                     println!("Error in the calculation of the path");
                     return GeneticSearch::default();
                 }
